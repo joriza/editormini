@@ -1,0 +1,5 @@
+# Rust / Cargo
+/target
+
+# Local artifacts
+*.pdb

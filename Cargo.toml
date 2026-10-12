@@ -1,0 +1,17 @@
+[package]
+name = "editormini"
+version = "0.1.0"
+edition = "2024"
+description = "A VS Code-like TUI text editor for the terminal"
+license = "MIT"
+
+[dependencies]
+ratatui = "0.29"
+syntect = { version = "5", default-features = false, features = ["default-fancy", "yaml-load"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+lto = true
+strip = true
