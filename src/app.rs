@@ -889,18 +889,17 @@ impl App {
             .as_ref()
             .map(|s| s.query.clone())
             .unwrap_or_default();
-        let matches = self.find_matches(&query);
-        let has_matches = !matches.is_empty();
-        let first_idx = has_matches.then_some(0);
-        let mut search = SearchState::new_replace(query, matches);
+        let mut search = SearchState::new_replace(query, vec![]);
         search.pre_search_line = pre_line;
         search.pre_search_col = pre_col;
-        search.current_idx = first_idx;
         search.navigated = false;
         search.cross_doc = true;
         search.start_doc = self.active;
-        let has_matches = !search.matches.is_empty();
+        // Seed the state BEFORE computing matches so find_matches sees
+        // cross_doc = true and spans every open document.
         self.search = Some(search);
+        self.search_reset_matches();
+        let has_matches = self.search.as_ref().is_some_and(|s| !s.matches.is_empty());
         if has_matches {
             self.goto_match(0);
         }
@@ -3938,6 +3937,34 @@ mod tests {
         let doc2 = doc_text(1);
         assert!(doc1.contains("HI HI"));
         assert!(doc2.contains("hello"));
+        let _ = dir;
+    }
+
+    // Task 4: Cross-doc replace dialog pre-filled from a previous active-doc
+    // search must compute matches across ALL docs (cross_doc flag must be
+    // visible to find_matches before the initial match computation).
+    #[test]
+    fn cross_doc_replace_prefill_matches_span_all_docs() {
+        let dir = temp_dir("cross_doc_prefill");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello").expect("pre-create");
+        std::fs::write(&path2, "hello again").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        // Seed a previous ACTIVE-doc search with the query (pre-fill source).
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        // Cross-doc replace pre-fills the query without retyping it.
+        app.on_key(ctrl_shift(KeyCode::Char('h')));
+        // Navigation must cross into doc 1: the match set spans both docs.
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.active, 1);
         let _ = dir;
     }
 
