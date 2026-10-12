@@ -42,6 +42,7 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | `F3` / `Ctrl+Shift+S` | guardar todo (pestañas con ruta; omite sin título) |
 | `Ctrl+O` | abrir archivo (prompt de ruta) |
 | `Ctrl+F` | buscar en el documento activo (diálogo con contador; `Enter`/`Shift+Enter` siguiente/anterior, `Esc` cierra; opciones case/regex a futuro) |
+| `Ctrl+H` | reemplazar en el documento activo (diálogo con pestaña entre Query/Replace, `F5` reemplaza actual, `F6` reemplaza todo con confirmación Y/N) |
 | Clic izquierdo en el editor | colocar el cursor (se adapta al desplazamiento) |
 | Números de línea | margen de números de línea siempre visible, alineados a la derecha, con énfasis en la línea del cursor |
 | Clic izquierdo en una pestaña | cambiar al documento de esa pestaña |

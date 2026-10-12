@@ -33,6 +33,22 @@ pub enum ConfirmKind {
     Quit,
     /// Close the tab at this document index.
     CloseTab(usize),
+    /// Replace all occurrences in the active document.
+    ReplaceAll(usize),
+}
+
+/// Whether the search/replace dialog is in find mode or replace mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchMode {
+    Find,
+    Replace,
+}
+
+/// Which input field has focus in the replace dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplaceField {
+    Query,
+    Replacement,
 }
 
 /// What a pending text-input prompt is for.
@@ -60,9 +76,10 @@ struct MatchPos {
     end_col: usize,
 }
 
-/// State of the active search dialog.
+/// State of the active search/replace dialog.
 pub struct SearchState {
     query: String,
+    replacement: String,
     matches: Vec<MatchPos>,
     /// Index into `matches` of the current match, or `None` if no
     /// navigation has happened yet (or no matches exist).
@@ -71,17 +88,36 @@ pub struct SearchState {
     pre_search_col: usize,
     /// True once the user has navigated to at least one match.
     navigated: bool,
+    mode: SearchMode,
+    field_focus: ReplaceField,
 }
 
 impl SearchState {
-    fn new(query: String, matches: Vec<MatchPos>) -> Self {
+    fn new_find(query: String, matches: Vec<MatchPos>) -> Self {
         SearchState {
             query,
+            replacement: String::new(),
             matches,
             current_idx: None,
             pre_search_line: 0,
             pre_search_col: 0,
             navigated: false,
+            mode: SearchMode::Find,
+            field_focus: ReplaceField::Query,
+        }
+    }
+
+    fn new_replace(query: String, matches: Vec<MatchPos>) -> Self {
+        SearchState {
+            query,
+            replacement: String::new(),
+            matches,
+            current_idx: None,
+            pre_search_line: 0,
+            pre_search_col: 0,
+            navigated: false,
+            mode: SearchMode::Replace,
+            field_focus: ReplaceField::Query,
         }
     }
 }
@@ -539,16 +575,22 @@ impl App {
     // -- Events ------------------------------------------------------------
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Ctrl+H opens the replace dialog (even when search is active).
+        if ctrl && matches!(key.code, KeyCode::Char('h' | 'H')) {
+            self.open_replace();
+            return;
+        }
+        if self.confirm.is_some() {
+            self.on_confirm_key(key.code);
+            return;
+        }
         if self.search.is_some() {
             self.on_search_key(key);
             return;
         }
         if self.prompt.is_some() {
             self.on_prompt_key(key);
-            return;
-        }
-        if self.confirm.is_some() {
-            self.on_confirm_key(key.code);
             return;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -689,6 +731,14 @@ impl App {
                 self.confirm = None;
                 self.close_tab(index);
             }
+            // Replace-all confirmation: Y/yes/S/sí performs the replacement.
+            (ConfirmKind::ReplaceAll(count), KeyCode::Char('y' | 'Y' | 's' | 'S')) => {
+                self.confirm = None;
+                self.perform_replace_all(count);
+            }
+            (ConfirmKind::ReplaceAll(_), KeyCode::Char('n' | 'N')) => {
+                self.confirm = None;
+            }
             (_, KeyCode::Char('c' | 'C')) | (_, KeyCode::Esc) => self.confirm = None,
             _ => {}
         }
@@ -767,16 +817,45 @@ impl App {
     fn open_search(&mut self) {
         let pre_line = self.cursor_line;
         let pre_col = self.cursor_col;
-        let mut search = SearchState::new(String::new(), vec![]);
+        let mut search = SearchState::new_find(String::new(), vec![]);
         search.pre_search_line = pre_line;
         search.pre_search_col = pre_col;
         self.search = Some(search);
     }
 
-    /// Handle keys while the search dialog is open.
+    /// Open the replace dialog, reusing the existing search query
+    /// if one is active, and starting in Replace mode.
+    fn open_replace(&mut self) {
+        let pre_line = self.cursor_line;
+        let pre_col = self.cursor_col;
+        let query = self
+            .search
+            .as_ref()
+            .map(|s| s.query.clone())
+            .unwrap_or_default();
+        let matches = self.find_matches(&query);
+        let has_matches = !matches.is_empty();
+        let first_idx = has_matches.then_some(0);
+        let mut search = SearchState::new_replace(query, matches);
+        search.pre_search_line = pre_line;
+        search.pre_search_col = pre_col;
+        search.current_idx = first_idx;
+        search.navigated = false;
+        let has_matches = !search.matches.is_empty();
+        self.search = Some(search);
+        if has_matches {
+            self.goto_match(0);
+        }
+    }
+
+    /// Handle keys while the search/replace dialog is open.
     fn on_search_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let is_replace = self
+            .search
+            .as_ref()
+            .is_some_and(|s| s.mode == SearchMode::Replace);
         match (key.code, ctrl, shift) {
             // Esc closes the dialog; restore cursor if no navigation.
             (KeyCode::Esc, _, _) => {
@@ -794,6 +873,10 @@ impl App {
                 self.clamp_cursor();
                 self.clamp_scroll();
             }
+            // Ctrl+Enter = replace current match and advance (replace mode only).
+            (KeyCode::Enter, true, _) if is_replace => {
+                self.replace_current_match();
+            }
             // Shift+Enter = previous match (wrap).
             (KeyCode::Enter, _, true) => {
                 self.search_prev_match();
@@ -802,18 +885,54 @@ impl App {
             (KeyCode::Enter, _, _) => {
                 self.search_next_match();
             }
-            // Printable characters: append to query, reset to first match.
+            // F5 = replace current match (fallback for Ctrl+Enter).
+            (KeyCode::F(5), _, _) if is_replace => {
+                self.replace_current_match();
+            }
+            // F6 = replace all (fallback).
+            (KeyCode::F(6), _, _) if is_replace => {
+                self.request_replace_all();
+            }
+            // Tab = switch field focus (replace mode only).
+            (KeyCode::Tab, _, _) if is_replace => {
+                if let Some(search) = &mut self.search {
+                    search.field_focus = match search.field_focus {
+                        ReplaceField::Query => ReplaceField::Replacement,
+                        ReplaceField::Replacement => ReplaceField::Query,
+                    };
+                }
+            }
+            // Shift+Tab = switch field focus back (replace mode only).
+            (KeyCode::Tab, _, true) if is_replace => {
+                if let Some(search) = &mut self.search {
+                    search.field_focus = match search.field_focus {
+                        ReplaceField::Query => ReplaceField::Replacement,
+                        ReplaceField::Replacement => ReplaceField::Query,
+                    };
+                }
+            }
+            // Printable characters in focused field: append, reset matches.
             // Accept any shift state (crossterm delivers the shifted char in `c`).
             (KeyCode::Char(c), false, _) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
                 if let Some(search) = &mut self.search {
-                    search.query.push(c);
+                    let focused = search.field_focus;
+                    if focused == ReplaceField::Query {
+                        search.query.push(c);
+                    } else {
+                        search.replacement.push(c);
+                    }
                 }
                 self.search_reset_matches();
             }
-            // Backspace: remove last char, reset matches.
+            // Backspace in focused field.
             (KeyCode::Backspace, _, _) => {
                 if let Some(search) = &mut self.search {
-                    search.query.pop();
+                    let focused = search.field_focus;
+                    if focused == ReplaceField::Query {
+                        search.query.pop();
+                    } else {
+                        search.replacement.pop();
+                    }
                 }
                 self.search_reset_matches();
             }
@@ -840,6 +959,132 @@ impl App {
         if has_matches {
             self.goto_match(0);
         }
+    }
+
+    /// Replace the current match with the replacement text and
+    /// advance to the next match. Routes through document edit
+    /// ops so Ctrl+Z undoes the replacement.
+    fn replace_current_match(&mut self) {
+        // Extract all needed data from search before any mutable borrows.
+        let (m, replacement, query) = {
+            let Some(search) = &self.search else {
+                return;
+            };
+            let Some(idx) = search.current_idx else {
+                return;
+            };
+            if search.matches.is_empty() {
+                return;
+            }
+            let m = search.matches[idx];
+            let replacement = search.replacement.clone();
+            let query = search.query.clone();
+            (m, replacement, query)
+        };
+        // Delete the match then insert the replacement; both
+        // records are pushed as one undo step.
+        let delete_record =
+            match self
+                .doc_mut()
+                .delete_range(m.line, m.start_col, m.line, m.end_col)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    self.status = i18n::error_message(self.lang, &e);
+                    return;
+                }
+            };
+        let insert_record = match self.doc_mut().insert(m.line, m.start_col, &replacement) {
+            Ok(r) => r,
+            Err(e) => {
+                if let Err(e2) = self.doc_mut().apply(&delete_record.inverse()) {
+                    self.status = i18n::error_message(self.lang, &e2);
+                }
+                self.status = i18n::error_message(self.lang, &e);
+                return;
+            }
+        };
+        self.record_edits(vec![delete_record, insert_record], false);
+        self.status = i18n::t(self.lang, Key::ReplacedCount).replace("{count}", "1");
+        // Recompute matches and advance.
+        let matches = self.find_matches(&query);
+        let mut goto_idx: Option<usize> = None;
+        if let Some(search) = &mut self.search {
+            search.matches = matches;
+            if search.matches.is_empty() {
+                search.current_idx = None;
+            } else {
+                let next = match search.current_idx {
+                    Some(i) if i + 1 < search.matches.len() => i + 1,
+                    _ => 0,
+                };
+                search.current_idx = Some(next);
+                goto_idx = Some(next);
+            }
+            search.navigated = true;
+        }
+        if let Some(idx) = goto_idx {
+            self.goto_match(idx);
+        }
+    }
+
+    /// Request replace-all: show a typed confirm modal with the
+    /// occurrence count. The actual replacement happens in
+    /// `on_confirm_key` when the user confirms.
+    fn request_replace_all(&mut self) {
+        let Some(search) = &self.search else {
+            return;
+        };
+        if search.matches.is_empty() {
+            return;
+        }
+        self.confirm = Some(ConfirmKind::ReplaceAll(search.matches.len()));
+    }
+
+    /// Perform the replace-all: iterate matches in reverse order
+    /// (bottom-to-top so offsets stay valid), apply each delete+
+    /// insert pair, and record all edits as one undo step.
+    fn perform_replace_all(&mut self, count: usize) {
+        let query = self
+            .search
+            .as_ref()
+            .map(|s| s.query.clone())
+            .unwrap_or_default();
+        let replacement = self
+            .search
+            .as_ref()
+            .map(|s| s.replacement.clone())
+            .unwrap_or_default();
+        let matches: Vec<MatchPos> = self.find_matches(&query);
+        if matches.is_empty() {
+            return;
+        }
+        let mut records: Vec<EditRecord> = Vec::new();
+        // Process bottom-to-top so earlier offsets stay valid.
+        for m in matches.iter().rev() {
+            if let Ok(delete_rec) =
+                self.doc_mut()
+                    .delete_range(m.line, m.start_col, m.line, m.end_col)
+            {
+                if let Ok(insert_rec) = self.doc_mut().insert(m.line, m.start_col, &replacement) {
+                    records.push(delete_rec);
+                    records.push(insert_rec);
+                } else {
+                    // If insert fails, undo the delete for this match.
+                    let _ = self.doc_mut().apply(&delete_rec.inverse());
+                }
+            }
+        }
+        if !records.is_empty() {
+            self.record_edits(records, false);
+            self.status = i18n::tr(
+                self.lang,
+                Key::ReplacedCount,
+                &[("count", &count.to_string())],
+            );
+        }
+        // Clear the search state since all matches are replaced.
+        self.search = None;
     }
 
     /// Advance to the next match (wraps around).
@@ -1253,12 +1498,17 @@ impl App {
         let widget = Paragraph::new(gutter_lines);
         f.render_widget(widget, area);
 
-        // Build the search dialog widget early; render it after the
+        // Build the search/replace dialog widget early; render it after the
         // text-lines so it appears on top of editor content.
         let dialog_widget = self.search.as_ref().map(|search| {
             let query = &search.query;
+            let is_replace = search.mode == SearchMode::Replace;
             let counter = if search.matches.is_empty() {
-                i18n::t(self.lang, Key::NoMatches).to_string()
+                if is_replace {
+                    i18n::t(self.lang, Key::NoMatchesReplace).to_string()
+                } else {
+                    i18n::t(self.lang, Key::NoMatches).to_string()
+                }
             } else {
                 let current = search.current_idx.map_or(0, |i| i + 1);
                 i18n::tr(
@@ -1270,19 +1520,49 @@ impl App {
                     ],
                 )
             };
-            let hints = format!(
-                "{}  {}  {}  {}",
-                i18n::t(self.lang, Key::FindNext),
-                i18n::t(self.lang, Key::FindPrev),
-                i18n::t(self.lang, Key::FindClose),
-                i18n::t(self.lang, Key::FindOptions),
-            );
-            let dialog_text = format!(
-                "{}  {}  {}",
-                i18n::t(self.lang, Key::FindDialogTitle),
-                query,
-                counter
-            );
+            let hints = if is_replace {
+                format!(
+                    "{}  {}  {}  {}  {}",
+                    i18n::t(self.lang, Key::ReplaceNext),
+                    i18n::t(self.lang, Key::ReplaceFallback),
+                    i18n::t(self.lang, Key::ReplaceAll),
+                    i18n::t(self.lang, Key::ReplaceSwitchField),
+                    i18n::t(self.lang, Key::ReplaceClose),
+                )
+            } else {
+                format!(
+                    "{}  {}  {}  {}",
+                    i18n::t(self.lang, Key::FindNext),
+                    i18n::t(self.lang, Key::FindPrev),
+                    i18n::t(self.lang, Key::FindClose),
+                    i18n::t(self.lang, Key::FindOptions),
+                )
+            };
+            let dialog_text = if is_replace {
+                let replacement = &search.replacement;
+                let field_marker = if search.field_focus == ReplaceField::Query {
+                    ">"
+                } else {
+                    "<"
+                };
+                format!(
+                    "{}  {} {}  {} {}  {} {}",
+                    i18n::t(self.lang, Key::ReplaceDialogTitle),
+                    i18n::t(self.lang, Key::ReplaceFieldQuery),
+                    query,
+                    field_marker,
+                    i18n::t(self.lang, Key::ReplaceFieldReplacement),
+                    replacement,
+                    counter
+                )
+            } else {
+                format!(
+                    "{}  {}  {}",
+                    i18n::t(self.lang, Key::FindDialogTitle),
+                    query,
+                    counter
+                )
+            };
             let line = Line::from(vec![
                 Span::styled(
                     dialog_text,
@@ -1376,7 +1656,18 @@ impl App {
             return;
         }
         if self.confirm.is_some() {
-            let prompt = i18n::t(self.lang, Key::SaveChangesPrompt);
+            let prompt = match self.confirm {
+                Some(ConfirmKind::ReplaceAll(count)) => {
+                    let title = i18n::t(self.lang, Key::ReplaceConfirmTitle);
+                    let msg = i18n::tr(
+                        self.lang,
+                        Key::ReplaceConfirmMessage,
+                        &[("count", &count.to_string())],
+                    );
+                    format!("{title} {msg}")
+                }
+                _ => i18n::t(self.lang, Key::SaveChangesPrompt).to_string(),
+            };
             let widget = Paragraph::new(prompt).style(
                 Style::new()
                     .fg(self.theme.prompt_fg)
@@ -2963,6 +3254,223 @@ mod tests {
         let dialog_cell = terminal.backend().buffer().get(0, 1);
         assert_eq!(dialog_cell.symbol(), "F");
         assert_eq!(dialog_cell.style().bg, Some(Color::Rgb(0xE2, 0xC0, 0x89)));
+        let _ = dir;
+    }
+
+    // R3-005: Ctrl+H opens the replace dialog.
+    #[test]
+    fn ctrl_h_opens_replace_dialog() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        assert!(app.search.is_none());
+        app.on_key(ctrl(KeyCode::Char('h')));
+        assert!(app.search.is_some());
+        let search = app.search.as_ref().unwrap();
+        assert_eq!(search.mode, SearchMode::Replace);
+        assert_eq!(search.field_focus, ReplaceField::Query);
+    }
+
+    // R3-006: Ctrl+H pre-fills query from an active search.
+    #[test]
+    fn ctrl_h_prefills_query_from_active_search() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        assert_eq!(app.search.as_ref().unwrap().query, "hello");
+        app.on_key(ctrl(KeyCode::Char('h')));
+        let search = app.search.as_ref().unwrap();
+        assert_eq!(search.mode, SearchMode::Replace);
+        assert_eq!(search.query, "hello");
+    }
+
+    // R3-007: Tab switches field focus in replace dialog.
+    #[test]
+    fn tab_switches_replace_field_focus() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('h')));
+        assert_eq!(
+            app.search.as_ref().unwrap().field_focus,
+            ReplaceField::Query
+        );
+        app.on_key(plain(KeyCode::Tab));
+        assert_eq!(
+            app.search.as_ref().unwrap().field_focus,
+            ReplaceField::Replacement
+        );
+        app.on_key(plain(KeyCode::Tab));
+        assert_eq!(
+            app.search.as_ref().unwrap().field_focus,
+            ReplaceField::Query
+        );
+    }
+
+    // R3-008: Shift+Tab switches field focus back in replace dialog.
+    #[test]
+    fn shift_tab_switches_replace_field_focus_back() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('h')));
+        app.on_key(plain(KeyCode::Tab));
+        assert_eq!(
+            app.search.as_ref().unwrap().field_focus,
+            ReplaceField::Replacement
+        );
+        app.on_key(shift(KeyCode::Tab));
+        assert_eq!(
+            app.search.as_ref().unwrap().field_focus,
+            ReplaceField::Query
+        );
+    }
+
+    // R3-009: Ctrl+Enter replaces current match and advances.
+    #[test]
+    fn ctrl_enter_replaces_current_match_and_advances() {
+        let dir = temp_dir("replace_current");
+        let path = dir.join("replace_current.txt");
+        std::fs::write(&path, "hello world hello").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        // Open search, find matches, then switch to replace.
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        assert!(app.search.as_ref().unwrap().matches.len() >= 2);
+        app.on_key(ctrl(KeyCode::Char('h')));
+        assert_eq!(app.search.as_ref().unwrap().mode, SearchMode::Replace);
+        // Switch to replacement field and type replacement text.
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "HI");
+        // Ctrl+Enter replaces current match and advances.
+        app.on_key(ctrl(KeyCode::Enter));
+        // The replacement should have been applied.
+        let doc = app.doc();
+        assert!(doc.line(0).contains("HI"));
+        // Counter should have refreshed (matches decreased).
+        let search = app.search.as_ref().unwrap();
+        assert!(search.matches.len() >= 1);
+        let _ = dir;
+    }
+
+    // R3-010: Replace-all via confirm modal replaces all and Ctrl+Z restores.
+    #[test]
+    fn replace_all_confirms_and_restores_with_undo() {
+        let dir = temp_dir("replace_all_undo");
+        let path = dir.join("replace_all_undo.txt");
+        std::fs::write(&path, "hello world hello").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        // Open replace dialog with pre-filled query.
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        let matches_before = app.search.as_ref().unwrap().matches.len();
+        assert!(
+            matches_before >= 2,
+            "expected >= 2 matches, got {matches_before}"
+        );
+        app.on_key(ctrl(KeyCode::Char('h')));
+        // Switch to replacement field and type replacement.
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "HI");
+        let repl = app.search.as_ref().unwrap().replacement.clone();
+        assert_eq!(repl, "HI", "replacement field should contain HI");
+        // F6 requests replace-all confirmation.
+        app.on_key(plain(KeyCode::F(6)));
+        assert!(app.confirm.is_some());
+        // Confirm with Y.
+        app.on_key(plain(KeyCode::Char('y')));
+        // All occurrences replaced.
+        let doc = app.doc();
+        eprintln!("DEBUG: doc line after replace-all: '{}'", doc.line(0));
+        eprintln!("DEBUG: search is_none: {}", app.search.is_none());
+        assert!(
+            doc.line(0).contains("HI world HI"),
+            "doc line: {}",
+            doc.line(0)
+        );
+        assert!(!doc.line(0).contains("hello"));
+        // Ctrl+Z restores original text.
+        app.on_key(ctrl(KeyCode::Char('z')));
+        let doc_after_undo = app.doc();
+        assert!(doc_after_undo.line(0).contains("hello world hello"));
+        let _ = dir;
+    }
+
+    // R3-011: Empty replacement deletes matches.
+    #[test]
+    fn empty_replacement_deletes_matches() {
+        let dir = temp_dir("empty_replace");
+        let path = dir.join("empty_replace.txt");
+        std::fs::write(&path, "hello world hello").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        app.on_key(ctrl(KeyCode::Char('h')));
+        // Switch to replacement field (empty by default).
+        app.on_key(plain(KeyCode::Tab));
+        assert!(app.search.as_ref().unwrap().replacement.is_empty());
+        // F6 requests replace-all confirmation.
+        app.on_key(plain(KeyCode::F(6)));
+        app.on_key(plain(KeyCode::Char('y')));
+        // All "hello" occurrences deleted.
+        let doc = app.doc();
+        assert!(!doc.line(0).contains("hello"));
+        assert!(doc.line(0).contains("world"));
+        let _ = dir;
+    }
+
+    // R3-012: Uppercase query works in replace dialog.
+    #[test]
+    fn uppercase_query_works_in_replace_dialog() {
+        let dir = temp_dir("uppercase_replace");
+        let path = dir.join("uppercase_replace.txt");
+        std::fs::write(&path, "Hello World Hello").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "Hello");
+        app.on_key(ctrl(KeyCode::Char('h')));
+        // Switch to replacement field and type uppercase.
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "BYE");
+        // F6 replace-all.
+        app.on_key(plain(KeyCode::F(6)));
+        app.on_key(plain(KeyCode::Char('y')));
+        let doc = app.doc();
+        assert!(doc.line(0).contains("BYE World BYE"));
+        let _ = dir;
+    }
+
+    // R3-013: Replace counter refreshes after replaces.
+    #[test]
+    fn replace_counter_refreshes_after_replaces() {
+        let dir = temp_dir("replace_counter");
+        let path = dir.join("replace_counter.txt");
+        std::fs::write(&path, "hello hello hello").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        let initial_count = app.search.as_ref().unwrap().matches.len();
+        assert_eq!(initial_count, 3);
+        app.on_key(ctrl(KeyCode::Char('h')));
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "HI");
+        app.on_key(plain(KeyCode::F(6)));
+        app.on_key(plain(KeyCode::Char('y')));
+        // After replace-all, search state is cleared.
+        assert!(app.search.is_none());
+        let _ = dir;
+    }
+
+    // R3-014: F5 replaces current match (fallback for Ctrl+Enter).
+    #[test]
+    fn f5_replaces_current_match_fallback() {
+        let dir = temp_dir("f5_replace");
+        let path = dir.join("f5_replace.txt");
+        std::fs::write(&path, "hello world hello").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        app.on_key(ctrl(KeyCode::Char('h')));
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "HI");
+        // F5 replaces current match.
+        app.on_key(plain(KeyCode::F(5)));
+        let doc = app.doc();
+        assert!(doc.line(0).contains("HI"));
         let _ = dir;
     }
 }

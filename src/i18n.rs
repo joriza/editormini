@@ -90,6 +90,30 @@ pub enum Key {
     FindDialogTitle,
     /// Search options placeholder (future case/regex toggles).
     FindOptions,
+    /// Replace dialog title.
+    ReplaceDialogTitle,
+    /// Key hint: Ctrl+Enter to replace current match.
+    ReplaceNext,
+    /// Key hint: F5 to replace (fallback).
+    ReplaceFallback,
+    /// Key hint: F6 to replace all.
+    ReplaceAll,
+    /// Key hint: Tab to switch field.
+    ReplaceSwitchField,
+    /// Key hint: Esc to close the replace dialog.
+    ReplaceClose,
+    /// Label for the query field in the replace dialog.
+    ReplaceFieldQuery,
+    /// Label for the replacement field in the replace dialog.
+    ReplaceFieldReplacement,
+    /// Replace-all confirmation title.
+    ReplaceConfirmTitle,
+    /// Replace-all confirmation message template: "{count}".
+    ReplaceConfirmMessage,
+    /// Status message after replace-all: "Replaced {count}".
+    ReplacedCount,
+    /// Status when no matches exist for replace.
+    NoMatchesReplace,
 }
 
 /// Translate `key` for `lang`.
@@ -175,6 +199,31 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::FindDialogTitle) => "Buscar",
         (Lang::En, Key::FindOptions) => "options: case/regex",
         (Lang::Es, Key::FindOptions) => "opciones: mayúsculas/regex",
+        // Replace dialog.
+        (Lang::En, Key::ReplaceDialogTitle) => "Replace",
+        (Lang::Es, Key::ReplaceDialogTitle) => "Reemplazar",
+        (Lang::En, Key::ReplaceNext) => "Ctrl+Enter: replace",
+        (Lang::Es, Key::ReplaceNext) => "Ctrl+Enter: reemplazar",
+        (Lang::En, Key::ReplaceFallback) => "F5: replace",
+        (Lang::Es, Key::ReplaceFallback) => "F5: reemplazar",
+        (Lang::En, Key::ReplaceAll) => "F6: replace all",
+        (Lang::Es, Key::ReplaceAll) => "F6: reemplazar todo",
+        (Lang::En, Key::ReplaceSwitchField) => "Tab: field",
+        (Lang::Es, Key::ReplaceSwitchField) => "Tab: campo",
+        (Lang::En, Key::ReplaceClose) => "Esc: close",
+        (Lang::Es, Key::ReplaceClose) => "Esc: cerrar",
+        (Lang::En, Key::ReplaceFieldQuery) => "Query:",
+        (Lang::Es, Key::ReplaceFieldQuery) => "Consulta:",
+        (Lang::En, Key::ReplaceFieldReplacement) => "Replace with:",
+        (Lang::Es, Key::ReplaceFieldReplacement) => "Reemplazar con:",
+        (Lang::En, Key::ReplaceConfirmTitle) => "Replace all?",
+        (Lang::Es, Key::ReplaceConfirmTitle) => "¿Reemplazar todo?",
+        (Lang::En, Key::ReplaceConfirmMessage) => "Replace {count} occurrence(s)?",
+        (Lang::Es, Key::ReplaceConfirmMessage) => "¿Reemplazar {count} ocurrencia(s)?",
+        (Lang::En, Key::ReplacedCount) => "Replaced {count}",
+        (Lang::Es, Key::ReplacedCount) => "Reemplazado(s) {count}",
+        (Lang::En, Key::NoMatchesReplace) => "No matches to replace",
+        (Lang::Es, Key::NoMatchesReplace) => "Sin coincidencias para reemplazar",
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg
@@ -237,6 +286,10 @@ mod tests {
         Key::About,
         Key::OverwriteIndicator,
         Key::PlainText,
+        Key::ReplaceFieldQuery,
+        Key::ReplaceFieldReplacement,
+        Key::ReplaceConfirmTitle,
+        Key::ReplaceConfirmMessage,
     ];
 
     #[test]
