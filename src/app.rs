@@ -7,12 +7,12 @@
 
 use std::io;
 
+use ratatui::Frame;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, read};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 use crate::document::{Document, DocumentError};
 use crate::i18n::{self, Key, Lang};
@@ -29,11 +29,31 @@ mod colors {
     pub const MODIFIED: Color = Color::Rgb(0xE2, 0xC0, 0x89);
 }
 
+/// What a pending confirmation applies to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmKind {
+    /// Quit the whole application.
+    Quit,
+    /// Close the tab at this document index.
+    CloseTab(usize),
+}
+
+/// Cursor and scroll state saved per tab while another tab is focused.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DocView {
+    pub line: usize,
+    pub col: usize,
+    pub scroll_top: usize,
+    pub col_off: usize,
+}
+
 pub struct App {
     pub docs: Vec<Document>,
     pub tree: PaneTree,
     /// Index of the focused document (single pane in this slice).
     pub active: usize,
+    /// Saved cursor/scroll per tab, index-aligned with `docs`.
+    pub views: Vec<DocView>,
     pub cursor_line: usize,
     pub cursor_col: usize,
     pub scroll_top: usize,
@@ -41,7 +61,8 @@ pub struct App {
     pub viewport_h: usize,
     pub viewport_w: usize,
     pub quit: bool,
-    pub confirm_quit: bool,
+    /// Pending confirmation: quit the app or close one tab.
+    pub confirm: Option<ConfirmKind>,
     /// Overwrite mode (Insert key). Off by default: VS Code-style insertion.
     pub overwrite: bool,
     /// Transient status message. Persists until the next edit action or the
@@ -52,10 +73,12 @@ pub struct App {
 
 impl App {
     pub fn new(docs: Vec<Document>, lang: Lang) -> Self {
+        let views = docs.iter().map(|_| DocView::default()).collect();
         App {
             docs,
             tree: PaneTree::single(0),
             active: 0,
+            views,
             cursor_line: 0,
             cursor_col: 0,
             scroll_top: 0,
@@ -63,7 +86,7 @@ impl App {
             viewport_h: 1,
             viewport_w: 1,
             quit: false,
-            confirm_quit: false,
+            confirm: None,
             overwrite: false,
             status: i18n::t(lang, Key::StartupHints).to_string(),
             lang,
@@ -186,8 +209,7 @@ impl App {
                     .path()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                self.status =
-                    format!("{} {path} ({bytes} B)", i18n::t(self.lang, Key::Saved));
+                self.status = format!("{} {path} ({bytes} B)", i18n::t(self.lang, Key::Saved));
             }
             Err(e) => self.status = format!("{e}"),
         }
@@ -195,26 +217,86 @@ impl App {
 
     fn request_quit(&mut self) {
         if self.docs.iter().any(Document::is_modified) {
-            self.confirm_quit = true;
+            self.confirm = Some(ConfirmKind::Quit);
         } else {
             self.quit = true;
         }
     }
 
+    /// Save the focused tab's view, then focus `index` and restore its view.
+    fn switch_to(&mut self, index: usize) {
+        self.views[self.active] = self.current_view();
+        self.active = index;
+        let view = self.views[index];
+        self.cursor_line = view.line;
+        self.cursor_col = view.col;
+        self.scroll_top = view.scroll_top;
+        self.col_off = view.col_off;
+        self.clamp_cursor();
+        self.clamp_scroll();
+    }
+
+    fn current_view(&self) -> DocView {
+        DocView {
+            line: self.cursor_line,
+            col: self.cursor_col,
+            scroll_top: self.scroll_top,
+            col_off: self.col_off,
+        }
+    }
+
     fn next_doc(&mut self, delta: isize) {
         let n = self.docs.len() as isize;
-        self.active = ((self.active as isize + delta).rem_euclid(n)) as usize;
-        self.cursor_line = 0;
-        self.cursor_col = 0;
-        self.scroll_top = 0;
-        self.col_off = 0;
+        let target = ((self.active as isize + delta).rem_euclid(n)) as usize;
+        self.switch_to(target);
+    }
+
+    /// Focus the last document of panel `n` (1-based). Panel 2+ arrive with
+    /// the split-screen milestone; until then only panel 1 exists.
+    fn last_doc_of_panel(&mut self, panel: usize) {
+        if panel == 1 {
+            let last = self.docs.len() - 1;
+            self.switch_to(last);
+        }
+    }
+
+    // -- Tab lifecycle -----------------------------------------------------
+
+    fn request_close(&mut self) {
+        if self.doc().is_modified() {
+            self.confirm = Some(ConfirmKind::CloseTab(self.active));
+        } else {
+            let index = self.active;
+            self.close_tab(index);
+        }
+    }
+
+    /// Remove the tab (after explicit confirmation when modified), keeping at
+    /// least one empty document open, VS Code-style.
+    fn close_tab(&mut self, index: usize) {
+        self.docs.remove(index);
+        self.views.remove(index);
+        if self.docs.is_empty() {
+            self.docs.push(Document::new_untitled());
+            self.views.push(DocView::default());
+        }
+        let target = index.min(self.docs.len() - 1);
+        // The closed tab's view is gone; do NOT save the stale cursor into
+        // the survivor's slot — load the target's view directly.
+        self.active = target;
+        let view = self.views[target];
+        self.cursor_line = view.line;
+        self.cursor_col = view.col;
+        self.scroll_top = view.scroll_top;
+        self.col_off = view.col_off;
         self.clamp_cursor();
+        self.clamp_scroll();
     }
 
     // -- Events ------------------------------------------------------------
 
     pub fn on_key(&mut self, key: KeyEvent) {
-        if self.confirm_quit {
+        if self.confirm.is_some() {
             self.on_confirm_key(key.code);
             return;
         }
@@ -223,6 +305,9 @@ impl App {
             (KeyCode::Char('s' | 'S'), true) => self.save_active(),
             (KeyCode::F(2), _) => self.save_active(),
             (KeyCode::Char('q'), true) => self.request_quit(),
+            (KeyCode::Char('w'), true) => self.request_close(),
+            (KeyCode::Char('1'), true) => self.last_doc_of_panel(1),
+            (KeyCode::Char('2'), true) => self.last_doc_of_panel(2),
             (KeyCode::PageDown, true) => self.next_doc(1),
             (KeyCode::PageUp, true) => self.next_doc(-1),
             (KeyCode::Insert, _) => {
@@ -291,29 +376,56 @@ impl App {
     }
 
     fn on_confirm_key(&mut self, code: KeyCode) {
-        match code {
+        let Some(kind) = self.confirm else {
+            return;
+        };
+        match (kind, code) {
             // [Y]es / [S]í — both keys accepted in both languages.
-            KeyCode::Char('y' | 'Y' | 's' | 'S') => {
+            (ConfirmKind::Quit, KeyCode::Char('y' | 'Y' | 's' | 'S')) => {
                 // Save every modified document with a path; a failure keeps
                 // the editor open and shows the error instead of losing work.
                 let mut failure: Option<String> = None;
                 for doc in &mut self.docs {
-                    if doc.is_modified() && doc.path().is_some()
-                        && let Err(e) = doc.save() {
-                            failure = Some(e.to_string());
-                            break;
-                        }
+                    if doc.is_modified()
+                        && doc.path().is_some()
+                        && let Err(e) = doc.save()
+                    {
+                        failure = Some(e.to_string());
+                        break;
+                    }
                 }
                 match failure {
                     Some(e) => {
                         self.status = e;
-                        self.confirm_quit = false;
+                        self.confirm = None;
                     }
                     None => self.quit = true,
                 }
             }
-            KeyCode::Char('n' | 'N') => self.quit = true,
-            KeyCode::Char('c' | 'C') | KeyCode::Esc => self.confirm_quit = false,
+            (ConfirmKind::CloseTab(index), KeyCode::Char('y' | 'Y' | 's' | 'S')) => {
+                let mut failure: Option<String> = None;
+                if self.docs[index].path().is_some()
+                    && let Err(e) = self.docs[index].save()
+                {
+                    failure = Some(e.to_string());
+                }
+                match failure {
+                    Some(e) => {
+                        self.status = e;
+                        self.confirm = None;
+                    }
+                    None => {
+                        self.confirm = None;
+                        self.close_tab(index);
+                    }
+                }
+            }
+            (ConfirmKind::Quit, KeyCode::Char('n' | 'N')) => self.quit = true,
+            (ConfirmKind::CloseTab(index), KeyCode::Char('n' | 'N')) => {
+                self.confirm = None;
+                self.close_tab(index);
+            }
+            (_, KeyCode::Char('c' | 'C')) | (_, KeyCode::Esc) => self.confirm = None,
             _ => {}
         }
     }
@@ -407,10 +519,10 @@ impl App {
     }
 
     fn draw_status(&mut self, f: &mut Frame, area: ratatui::prelude::Rect) {
-        if self.confirm_quit {
+        if self.confirm.is_some() {
             let prompt = i18n::t(self.lang, Key::SaveChangesPrompt);
-            let widget = Paragraph::new(prompt)
-                .style(Style::new().fg(Color::Black).bg(colors::MODIFIED));
+            let widget =
+                Paragraph::new(prompt).style(Style::new().fg(Color::Black).bg(colors::MODIFIED));
             f.render_widget(widget, area);
             return;
         }
@@ -481,7 +593,8 @@ mod tests {
     }
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("editormini_app_{name}_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("editormini_app_{name}_{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
     }
@@ -508,7 +621,10 @@ mod tests {
         let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
         typed(&mut app, "contenido");
         app.on_key(ctrl(KeyCode::Char('s')));
-        assert!(!app.doc().is_modified(), "save must clear the modified flag");
+        assert!(
+            !app.doc().is_modified(),
+            "save must clear the modified flag"
+        );
         let on_disk = std::fs::read_to_string(&path).expect("file saved");
         assert_eq!(on_disk, "contenido\r\n");
         assert!(app.status.contains("Saved"), "status: {}", app.status);
@@ -537,7 +653,10 @@ mod tests {
             "error must be visible, got: {}",
             app.status
         );
-        assert!(app.doc().is_modified(), "untitled save must not lose changes");
+        assert!(
+            app.doc().is_modified(),
+            "untitled save must not lose changes"
+        );
     }
 
     #[test]
@@ -585,7 +704,7 @@ mod tests {
         let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
         typed(&mut app, "work");
         app.on_key(ctrl(KeyCode::Char('q')));
-        assert!(app.confirm_quit);
+        assert_eq!(app.confirm, Some(ConfirmKind::Quit));
         assert!(!app.quit);
         app.on_key(plain(KeyCode::Char('y')));
         assert!(app.quit);
@@ -616,9 +735,9 @@ mod tests {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         typed(&mut app, "keep me");
         app.on_key(ctrl(KeyCode::Char('q')));
-        assert!(app.confirm_quit);
+        assert_eq!(app.confirm, Some(ConfirmKind::Quit));
         app.on_key(plain(KeyCode::Char('c')));
-        assert!(!app.confirm_quit);
+        assert_eq!(app.confirm, None);
         assert!(!app.quit);
         assert_eq!(app.doc().line(0), "keep me");
     }
@@ -655,5 +774,116 @@ mod tests {
         assert!(app.quit);
         assert_eq!(std::fs::read_to_string(&path).expect("saved"), "datos\r\n");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ctrl_1_focuses_last_document_of_panel_1() {
+        let mut app = App::new(
+            vec![
+                Document::new_untitled(),
+                Document::new_untitled(),
+                Document::new_untitled(),
+            ],
+            Lang::En,
+        );
+        app.on_key(ctrl(KeyCode::Char('1')));
+        assert_eq!(app.active, 2, "Ctrl+1 jumps to the last doc of panel 1");
+    }
+
+    #[test]
+    fn ctrl_2_is_reserved_until_panels_exist() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        app.on_key(ctrl(KeyCode::Char('2')));
+        assert_eq!(app.active, 0, "no panel 2 yet: reserved no-op");
+    }
+
+    #[test]
+    fn ctrl_w_closes_unmodified_tab_immediately() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        app.on_key(ctrl(KeyCode::Char('w')));
+        assert_eq!(app.docs.len(), 1);
+        assert_eq!(app.active, 0);
+        assert_eq!(app.confirm, None);
+    }
+
+    #[test]
+    fn ctrl_w_modified_prompts_then_y_saves_and_closes() {
+        let dir = temp_dir("closeyes");
+        let path_a = dir.join("a.txt");
+        let path_b = dir.join("b.txt");
+        let mut app = App::new(
+            vec![
+                Document::new_with_path(&path_a),
+                Document::new_with_path(&path_b),
+            ],
+            Lang::En,
+        );
+        typed(&mut app, "content A");
+        app.on_key(ctrl(KeyCode::Char('w')));
+        assert_eq!(app.confirm, Some(ConfirmKind::CloseTab(0)));
+        app.on_key(plain(KeyCode::Char('y')));
+        assert_eq!(app.docs.len(), 1, "tab A closed");
+        assert_eq!(app.doc().path(), Some(path_b.as_path()));
+        assert_eq!(
+            std::fs::read_to_string(&path_a).expect("saved before close"),
+            "content A\r\n"
+        );
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn ctrl_w_prompt_n_closes_without_saving() {
+        let dir = temp_dir("closeno");
+        let path = dir.join("a.txt");
+        std::fs::write(&path, "").expect("pre-create empty file");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
+        typed(&mut app, "discard me");
+        app.on_key(ctrl(KeyCode::Char('w')));
+        assert_eq!(app.confirm, Some(ConfirmKind::CloseTab(0)));
+        app.on_key(plain(KeyCode::Char('n')));
+        assert_eq!(app.docs.len(), 1, "closed last tab replaced by fresh untitled");
+        assert!(app.doc().path().is_none());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("untouched"),
+            "",
+            "discard must not write"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ctrl_w_prompt_c_cancels_close() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "keep");
+        app.on_key(ctrl(KeyCode::Char('w')));
+        assert_eq!(app.confirm, Some(ConfirmKind::CloseTab(0)));
+        app.on_key(plain(KeyCode::Char('c')));
+        assert_eq!(app.confirm, None);
+        assert_eq!(app.docs.len(), 1);
+        assert_eq!(app.doc().line(0), "keep");
+    }
+
+    #[test]
+    fn cursor_and_scroll_restored_on_tab_switch() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        typed(&mut app, "hola");
+        app.on_key(ctrl(KeyCode::PageDown));
+        typed(&mut app, "xy");
+        app.on_key(ctrl(KeyCode::PageUp));
+        assert_eq!(app.doc().line(0), "hola");
+        assert_eq!((app.cursor_line, app.cursor_col), (0, 4));
+        app.on_key(ctrl(KeyCode::PageDown));
+        assert_eq!(app.doc().line(0), "xy");
+        assert_eq!((app.cursor_line, app.cursor_col), (0, 2));
     }
 }
