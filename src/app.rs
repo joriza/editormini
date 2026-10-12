@@ -204,6 +204,11 @@ pub struct App {
     pub confirm: Option<ConfirmKind>,
     /// Pending text-input prompt: open file or save-as destination.
     pub prompt: Option<(PromptKind, String)>,
+    /// Interactive Ctrl+O candidate files (dir of the active document,
+    /// filtered by the typed input). Empty for non-open prompts.
+    pub open_candidates: Vec<PathBuf>,
+    /// Highlighted row within `open_candidates`.
+    pub open_selected: usize,
     /// Pending search dialog state.
     pub search: Option<SearchState>,
     /// Search options struct (present for future toggles, no UI yet).
@@ -239,6 +244,8 @@ impl App {
             quit: false,
             confirm: None,
             prompt: None,
+            open_candidates: Vec::new(),
+            open_selected: 0,
             search: None,
             search_options: SearchOptions::default(),
             overwrite: false,
@@ -968,6 +975,45 @@ impl App {
     /// Open the text-input prompt for a file path.
     fn open_file_prompt(&mut self) {
         self.prompt = Some((PromptKind::OpenFile, String::new()));
+        self.refresh_open_candidates();
+        self.open_selected = 0;
+    }
+
+    /// Recompute the interactive Ctrl+O list: files in the active
+    /// document's directory (cwd when untitled) whose name contains the
+    /// typed input, case-insensitively, capped at 50 entries.
+    fn refresh_open_candidates(&mut self) {
+        let Some((PromptKind::OpenFile, input)) = &self.prompt else {
+            return;
+        };
+        let dir = self
+            .doc()
+            .path()
+            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        self.open_candidates = Self::compute_open_candidates(&dir, input);
+        self.open_selected = 0;
+    }
+
+    /// Files in `dir` whose file name contains `filter`
+    /// (case-insensitive), sorted by name, capped at 50.
+    fn compute_open_candidates(dir: &std::path::Path, filter: &str) -> Vec<PathBuf> {
+        let filter_lc = filter.to_lowercase();
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|p| p.is_file())
+            .filter(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase().contains(&filter_lc))
+                    .unwrap_or(false)
+            })
+            .collect();
+        files.sort();
+        files.truncate(50);
+        files
     }
 
     fn request_quit(&mut self) {
@@ -1299,24 +1345,52 @@ impl App {
         let Some((kind, input)) = &mut self.prompt else {
             return;
         };
+        let is_open = matches!(kind, PromptKind::OpenFile);
         match key.code {
+            // Interactive open-file list navigation (OpenFile only).
+            KeyCode::Up if is_open => {
+                self.open_selected = self.open_selected.saturating_sub(1);
+            }
+            KeyCode::Down if is_open => {
+                if self.open_selected + 1 < self.open_candidates.len() {
+                    self.open_selected += 1;
+                }
+            }
             KeyCode::Enter => {
-                let path = input.clone();
+                // The highlighted candidate wins over the raw input.
+                let path = if is_open {
+                    self.open_candidates
+                        .get(self.open_selected)
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| input.clone())
+                } else {
+                    input.clone()
+                };
                 let kind = *kind;
                 self.prompt = None;
+                self.open_candidates.clear();
+                self.open_selected = 0;
                 self.handle_prompt_confirm(&kind, &path);
             }
             KeyCode::Esc => {
                 self.prompt = None;
+                self.open_candidates.clear();
+                self.open_selected = 0;
             }
             KeyCode::Backspace => {
                 input.pop();
+                if is_open {
+                    self.refresh_open_candidates();
+                }
             }
             KeyCode::Char(c)
                 if !key.modifiers.contains(KeyModifiers::CONTROL)
                     && !key.modifiers.contains(KeyModifiers::ALT) =>
             {
                 input.push(c);
+                if is_open {
+                    self.refresh_open_candidates();
+                }
             }
             _ => {}
         }
@@ -1334,6 +1408,8 @@ impl App {
                             self.views.push(DocView::default());
                             self.histories.push(History::new());
                             self.selections.push(None);
+                            // Opening a file focuses its tab (VS Code behavior).
+                            self.active = self.docs.len() - 1;
                             self.status = i18n::tr(self.lang, Key::FileOpened, &[("path", path)]);
                         }
                         Err(e) => {
@@ -1346,6 +1422,7 @@ impl App {
                     self.views.push(DocView::default());
                     self.histories.push(History::new());
                     self.selections.push(None);
+                    self.active = self.docs.len() - 1;
                     self.status = i18n::tr(self.lang, Key::FileOpened, &[("path", path)]);
                 }
             }
@@ -2070,6 +2147,54 @@ impl App {
         self.draw_tabs(f, tabs_area);
         self.draw_editor(f, editor_area);
         self.draw_status(f, status_area);
+        self.draw_open_list(f, editor_area);
+    }
+
+    /// Interactive Ctrl+O candidate list: up to 5 entries at the bottom of
+    /// the editor area, the highlighted one styled with the prompt colors.
+    fn draw_open_list(&mut self, f: &mut Frame, editor_area: ratatui::prelude::Rect) {
+        if !matches!(self.prompt, Some((PromptKind::OpenFile, _)))
+            || self.open_candidates.is_empty()
+        {
+            return;
+        }
+        let visible = self.open_candidates.len().min(5);
+        let height = visible as u16;
+        let y = editor_area.y + editor_area.height.saturating_sub(height);
+        let area = ratatui::prelude::Rect {
+            x: editor_area.x,
+            y,
+            width: editor_area.width,
+            height,
+        };
+        let candidates = self.open_candidates.clone();
+        let selected = self.open_selected;
+        // Keep the highlighted entry inside the visible window.
+        let skip = (selected + 1).saturating_sub(visible);
+        let lines: Vec<Line> = candidates
+            .iter()
+            .skip(skip)
+            .take(visible)
+            .enumerate()
+            .map(|(i, path)| {
+                let idx = skip + i;
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let style = if idx == selected {
+                    Style::new()
+                        .fg(self.theme.prompt_fg)
+                        .bg(self.theme.prompt_bg)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(self.theme.fg).bg(self.theme.bg)
+                };
+                let marker = if idx == selected { "> " } else { "  " };
+                Line::from(Span::styled(format!("{marker}{name}"), style))
+            })
+            .collect();
+        f.render_widget(Paragraph::new(lines), area);
     }
 
     fn doc_title(&self, index: usize) -> String {
@@ -5200,6 +5325,101 @@ mod tests {
         app.on_key(ctrl(KeyCode::Left));
         assert_eq!(app.cursor_line, 0);
         assert_eq!(app.cursor_col, 5);
+    }
+
+    // ============ T5: interactive open list ============
+
+    #[test]
+    fn compute_open_candidates_filters_and_skips_dirs() {
+        let dir = temp_dir("open_candidates");
+        std::fs::write(dir.join("beta.txt"), "b").expect("write");
+        std::fs::write(dir.join("alpha.md"), "a").expect("write");
+        std::fs::create_dir(dir.join("subdir")).expect("mkdir");
+        let all = App::compute_open_candidates(&dir, "");
+        assert_eq!(all.len(), 2, "directories are not candidates");
+        let filtered = App::compute_open_candidates(&dir, "ALP");
+        assert_eq!(filtered.len(), 1, "filter is case-insensitive");
+        assert!(filtered[0].ends_with("alpha.md"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_prompt_filters_enter_opens_selected() {
+        let dir = temp_dir("open_prompt_flow");
+        std::fs::write(dir.join("beta.txt"), "beta-content").expect("write");
+        std::fs::write(dir.join("gamma.txt"), "gamma-content").expect("write");
+        let seed = dir.join("seed.txt");
+        std::fs::write(&seed, "seed").expect("write");
+        let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('o')));
+        assert!(app.prompt.is_some());
+        assert_eq!(app.open_candidates.len(), 3, "all dir files listed");
+        // Typing filters the candidate list (and feeds the input field).
+        typed(&mut app, "gam");
+        assert_eq!(app.open_candidates.len(), 1);
+        // Enter opens the highlighted candidate.
+        app.on_key(plain(KeyCode::Enter));
+        assert!(app.prompt.is_none());
+        assert_eq!(app.docs.len(), 2);
+        assert!(
+            app.doc()
+                .path()
+                .map(|p| p.ends_with("gamma.txt"))
+                .unwrap_or(false),
+            "active doc must be gamma.txt"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_prompt_arrows_move_selection_with_clamp() {
+        let dir = temp_dir("open_prompt_arrows");
+        std::fs::write(dir.join("a.txt"), "a").expect("write");
+        std::fs::write(dir.join("b.txt"), "b").expect("write");
+        let seed = dir.join("seed.txt");
+        std::fs::write(&seed, "seed").expect("write");
+        let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('o')));
+        assert_eq!(app.open_selected, 0);
+        app.on_key(plain(KeyCode::Down));
+        assert_eq!(app.open_selected, 1);
+        app.on_key(plain(KeyCode::Down));
+        assert_eq!(app.open_selected, 2, "clamped at the last candidate (3 files)");
+        app.on_key(plain(KeyCode::Up));
+        assert_eq!(app.open_selected, 1);
+        app.on_key(plain(KeyCode::Up));
+        assert_eq!(app.open_selected, 0);
+        app.on_key(plain(KeyCode::Up));
+        assert_eq!(app.open_selected, 0, "clamped at the first candidate");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_prompt_renders_candidate_list() {
+        let dir = temp_dir("open_prompt_render");
+        std::fs::write(dir.join("only.txt"), "x").expect("write");
+        let seed = dir.join("seed.txt");
+        std::fs::write(&seed, "seed").expect("write");
+        let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        // Prime the viewport before any key handling.
+        terminal.draw(|f| app.draw(f)).unwrap();
+        app.on_key(ctrl(KeyCode::Char('o')));
+        terminal.draw(|f| app.draw(f)).unwrap();
+        // 2 candidates -> the list occupies the LAST TWO editor rows
+        // (frame rows 7-8), sorted by name: only.txt then seed.txt.
+        let mut first = String::new();
+        let mut second = String::new();
+        for col in 0..20u16 {
+            first.push_str(terminal.backend().buffer().get(col, 7).symbol());
+            second.push_str(terminal.backend().buffer().get(col, 8).symbol());
+        }
+        assert!(first.contains("> only.txt"), "row 7: {first}");
+        assert!(second.contains("seed.txt"), "row 8: {second}");
+        let cell = terminal.backend().buffer().get(0, 7);
+        assert_eq!(cell.style().bg, Some(Color::Rgb(0xE2, 0xC0, 0x89)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ============ T4: clipboard ============
