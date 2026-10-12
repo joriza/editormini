@@ -1754,9 +1754,12 @@ impl App {
             )
         });
 
-        // Render the search dialog on top of editor content.
+        // Render the search dialog on top of editor content, but confined to
+        // its own single row: a Paragraph's base style fills the entire rect
+        // it is rendered into, so handing it the full editor area washed the
+        // whole screen in the prompt background (unreadable).
         if let Some(dialog) = dialog_widget {
-            f.render_widget(dialog, area);
+            f.render_widget(dialog, ratatui::prelude::Rect { height: 1, ..area });
         }
 
         let x = area.x + gutter_w as u16 + (self.cursor_col - self.col_off) as u16;
@@ -3443,6 +3446,34 @@ mod tests {
         let dialog_cell = terminal.backend().buffer().get(0, 1);
         assert_eq!(dialog_cell.symbol(), "F");
         assert_eq!(dialog_cell.style().bg, Some(Color::Rgb(0xE2, 0xC0, 0x89)));
+        let _ = dir;
+    }
+
+    // Regression: the dialog Paragraph's base style was rendered over the
+    // whole editor area, washing the entire screen in the prompt background.
+    #[test]
+    fn search_dialog_paints_only_its_own_row() {
+        let dir = temp_dir("search_dialog_row_scope");
+        let path = dir.join("search_row_scope.txt");
+        std::fs::write(&path, "alpha beta\ngamma delta\nepsilon zeta\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "delta");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        // The dialog bar occupies only the first editor row (frame row 1).
+        let dialog_cell = terminal.backend().buffer().get(0, 1);
+        assert_eq!(dialog_cell.style().bg, Some(Color::Rgb(0xE2, 0xC0, 0x89)));
+        // Rows below the dialog keep the editor background, not the prompt one.
+        for row in [2u16, 5, 8] {
+            let cell = terminal.backend().buffer().get(0, row);
+            assert_eq!(
+                cell.style().bg,
+                Some(Color::Rgb(0x1E, 0x1E, 0x1E)),
+                "row {row} must keep the editor background"
+            );
+        }
         let _ = dir;
     }
 
