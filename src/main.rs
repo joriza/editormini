@@ -26,7 +26,7 @@ use ratatui::crossterm::terminal::{
 #[command(
     name = "editormini",
     version,
-    about = "A VS Code-like TUI text editor\n\nKeys: F2 or Ctrl+S save · Ctrl+Q quit · Ins overwrite · Ctrl+PgUp/PgDn switch tab"
+    about = "A VS Code-like TUI text editor\n\nKeys: F2 or Ctrl+S save · Ctrl+Z undo · Ctrl+Q quit · Ins overwrite · Ctrl+PgUp/PgDn switch tab"
 )]
 struct Cli {
     /// Files to open as tabs (created on save if they do not exist)

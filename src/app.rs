@@ -2,8 +2,9 @@
 //!
 //! Slice scope: one pane from the pane tree, tab bar (render + Ctrl+PgUp/PgDn
 //! switching), editor viewport with cursor, save (F2/Ctrl+S), quit (Ctrl+Q)
-//! with unsaved-changes prompt, and Insert-key overwrite toggle.
-//! Syntax highlighting, undo, and mouse support arrive in later tasks.
+//! with unsaved-changes prompt, Insert-key overwrite toggle, and bounded
+//! per-tab undo/redo (Ctrl+Z/Ctrl+Y).
+//! Syntax highlighting and mouse support arrive in later tasks.
 
 use std::io;
 
@@ -14,7 +15,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::document::{Document, DocumentError};
+use crate::document::{Document, DocumentError, EditRecord};
 use crate::i18n::{self, Key, Lang};
 use crate::pane::PaneTree;
 
@@ -47,6 +48,27 @@ pub struct DocView {
     pub col_off: usize,
 }
 
+/// Maximum undo steps kept per tab (oldest dropped first).
+pub const UNDO_LIMIT: usize = 100;
+
+/// Bounded per-tab edit history. One undo step is a `Vec<EditRecord>` because
+/// one logical edit (an overwrite keystroke, a multi-line paste) can apply
+/// more than one record; typing bursts merge consecutive characters so
+/// Ctrl+Z removes a whole typed run at once.
+#[derive(Debug, Default)]
+pub struct History {
+    pub undo: Vec<Vec<EditRecord>>,
+    pub redo: Vec<Vec<EditRecord>>,
+    /// True while consecutive typed characters merge into the last group.
+    pub burst: bool,
+}
+
+impl History {
+    fn new() -> Self {
+        History::default()
+    }
+}
+
 pub struct App {
     pub docs: Vec<Document>,
     pub tree: PaneTree,
@@ -54,6 +76,8 @@ pub struct App {
     pub active: usize,
     /// Saved cursor/scroll per tab, index-aligned with `docs`.
     pub views: Vec<DocView>,
+    /// Bounded edit history per tab, index-aligned with `docs`.
+    pub histories: Vec<History>,
     pub cursor_line: usize,
     pub cursor_col: usize,
     pub scroll_top: usize,
@@ -74,11 +98,13 @@ pub struct App {
 impl App {
     pub fn new(docs: Vec<Document>, lang: Lang) -> Self {
         let views = docs.iter().map(|_| DocView::default()).collect();
+        let histories = (0..docs.len()).map(|_| History::new()).collect();
         App {
             docs,
             tree: PaneTree::single(0),
             active: 0,
             views,
+            histories,
             cursor_line: 0,
             cursor_col: 0,
             scroll_top: 0,
@@ -128,11 +154,100 @@ impl App {
 
     // -- Editing -----------------------------------------------------------
 
-    fn insert_text(&mut self, text: &str) {
+    /// Push applied edits into the tab's undo history as one step.
+    /// `continues_burst` merges consecutive typed characters into a single
+    /// undo step; anything else (Enter, Backspace, Delete, overwrite) closes
+    /// the current burst.
+    fn record_edits(&mut self, mut records: Vec<EditRecord>, continues_burst: bool) {
+        if records.is_empty() {
+            return;
+        }
+        let h = &mut self.histories[self.active];
+        if continues_burst && h.burst {
+            if let Some(last) = h.undo.last_mut() {
+                last.append(&mut records);
+            }
+        } else {
+            h.undo.push(records);
+            if h.undo.len() > UNDO_LIMIT {
+                h.undo.remove(0);
+            }
+        }
+        h.redo.clear();
+        h.burst = continues_burst;
+    }
+
+    /// Undo the last step (Ctrl+Z): apply the group's inverses newest-first
+    /// and leave the cursor where the undone edit started.
+    fn undo(&mut self) {
+        let Some(group) = self.histories[self.active].undo.pop() else {
+            return;
+        };
+        let origin = group.first().map(|r| match r {
+            EditRecord::Insert { line, col, .. }
+            | EditRecord::Delete {
+                start_line: line,
+                start_col: col,
+                ..
+            } => (*line, *col),
+        });
+        for record in group.iter().rev() {
+            if let Err(e) = self.doc_mut().apply(&record.inverse()) {
+                self.status = format!("{e}");
+            }
+        }
+        self.histories[self.active].redo.push(group);
+        if let Some((line, col)) = origin {
+            (self.cursor_line, self.cursor_col) = (line, col);
+            self.clamp_cursor();
+            self.clamp_scroll();
+        }
+    }
+
+    /// Redo the last undone step (Ctrl+Y): reapply the group oldest-first and
+    /// leave the cursor at the end of the last reapplied edit.
+    fn redo(&mut self) {
+        let Some(group) = self.histories[self.active].redo.pop() else {
+            return;
+        };
+        let end = group.last().map(|r| match r {
+            EditRecord::Insert { line, col, text } => {
+                let segments: Vec<&str> = text.split('\n').collect();
+                if segments.len() == 1 {
+                    // Single-line insert: end sits col + length on the line.
+                    (*line, col + segments[0].chars().count())
+                } else {
+                    (
+                        line + segments.len() - 1,
+                        segments.last().map(|s| s.chars().count()).unwrap_or(0),
+                    )
+                }
+            }
+            EditRecord::Delete {
+                end_line,
+                end_col,
+                ..
+            } => (*end_line, *end_col),
+        });
+        for record in &group {
+            if let Err(e) = self.doc_mut().apply(record) {
+                self.status = format!("{e}");
+            }
+        }
+        self.histories[self.active].undo.push(group);
+        if let Some((line, col)) = end {
+            (self.cursor_line, self.cursor_col) = (line, col);
+            self.clamp_cursor();
+            self.clamp_scroll();
+        }
+    }
+
+    /// Perform an insert and return its record without touching history.
+    fn do_insert(&mut self, text: &str) -> Option<EditRecord> {
         self.status.clear();
         let (line, col) = (self.cursor_line, self.cursor_col);
         match self.doc_mut().insert(line, col, text) {
-            Ok(_) => {
+            Ok(record) => {
                 let parts: Vec<&str> = text.split('\n').collect();
                 self.cursor_line += parts.len() - 1;
                 if parts.len() == 1 {
@@ -143,24 +258,55 @@ impl App {
                     // text (start of any tail that was pushed down with it).
                     self.cursor_col = parts.last().map(|s| s.chars().count()).unwrap_or(0);
                 }
+                Some(record)
             }
-            Err(DocumentError::ReadOnly) => self.status = "read-only".to_string(),
-            Err(e) => self.status = format!("{e}"),
+            Err(DocumentError::ReadOnly) => {
+                self.status = "read-only".to_string();
+                None
+            }
+            Err(e) => {
+                self.status = format!("{e}");
+                None
+            }
+        }
+    }
+
+    fn insert_text(&mut self, text: &str, continues_burst: bool) {
+        if let Some(record) = self.do_insert(text) {
+            self.record_edits(vec![record], continues_burst);
         }
         self.clamp_cursor();
     }
 
     /// Type one printable key. In overwrite mode (Insert), the character under
-    /// the cursor is replaced instead of shifting text right.
+    /// the cursor is replaced instead of shifting text right; the replacement
+    /// (delete + insert) is ONE undo step per keystroke.
     fn type_char(&mut self, c: char) {
-        if self.overwrite && self.cursor_col < self.doc().line_len(self.cursor_line) {
+        self.status.clear();
+        let mut records: Vec<EditRecord> = Vec::new();
+        let overwrite_replaced =
+            self.overwrite && self.cursor_col < self.doc().line_len(self.cursor_line);
+        if overwrite_replaced {
             let (line, col) = (self.cursor_line, self.cursor_col);
-            if let Err(e) = self.doc_mut().delete_range(line, col, line, col + 1) {
-                self.status = format!("{e}");
+            match self.doc_mut().delete_range(line, col, line, col + 1) {
+                Ok(record) => records.push(record),
+                Err(e) => {
+                    self.status = format!("{e}");
+                    return;
+                }
+            }
+        }
+        match self.do_insert(&c.to_string()) {
+            Some(record) => records.push(record),
+            None => {
+                self.clamp_cursor();
                 return;
             }
         }
-        self.insert_text(&c.to_string());
+        // Plain typing continues the burst; each overwrite keystroke is its
+        // own undo step (delete + insert together).
+        self.record_edits(records, !overwrite_replaced);
+        self.clamp_cursor();
     }
 
     fn backspace(&mut self) {
@@ -177,8 +323,9 @@ impl App {
         } else {
             return;
         };
-        if let Err(e) = result {
-            self.status = format!("{e}");
+        match result {
+            Ok(record) => self.record_edits(vec![record], false),
+            Err(e) => self.status = format!("{e}"),
         }
         self.clamp_cursor();
     }
@@ -193,8 +340,9 @@ impl App {
         } else {
             return;
         };
-        if let Err(e) = result {
-            self.status = format!("{e}");
+        match result {
+            Ok(record) => self.record_edits(vec![record], false),
+            Err(e) => self.status = format!("{e}"),
         }
         self.clamp_cursor();
     }
@@ -276,9 +424,11 @@ impl App {
     fn close_tab(&mut self, index: usize) {
         self.docs.remove(index);
         self.views.remove(index);
+        self.histories.remove(index);
         if self.docs.is_empty() {
             self.docs.push(Document::new_untitled());
             self.views.push(DocView::default());
+            self.histories.push(History::new());
         }
         let target = index.min(self.docs.len() - 1);
         // The closed tab's view is gone; do NOT save the stale cursor into
@@ -306,6 +456,9 @@ impl App {
             (KeyCode::F(2), _) => self.save_active(),
             (KeyCode::Char('q'), true) => self.request_quit(),
             (KeyCode::Char('w'), true) => self.request_close(),
+            (KeyCode::Char('z'), true) => self.undo(),
+            (KeyCode::Char('Z'), true) => self.redo(),
+            (KeyCode::Char('y'), true) => self.redo(),
             (KeyCode::Char('1'), true) => self.last_doc_of_panel(1),
             (KeyCode::Char('2'), true) => self.last_doc_of_panel(2),
             (KeyCode::PageDown, true) => self.next_doc(1),
@@ -320,7 +473,7 @@ impl App {
                 self.status = i18n::t(self.lang, key).to_string();
             }
             (KeyCode::Char(c), false) => self.type_char(c),
-            (KeyCode::Enter, _) => self.insert_text("\n"),
+            (KeyCode::Enter, _) => self.insert_text("\n", false),
             (KeyCode::Backspace, _) => self.backspace(),
             (KeyCode::Delete, _) => self.delete_forward(),
             (KeyCode::Left, _) => {
@@ -848,7 +1001,11 @@ mod tests {
         app.on_key(ctrl(KeyCode::Char('w')));
         assert_eq!(app.confirm, Some(ConfirmKind::CloseTab(0)));
         app.on_key(plain(KeyCode::Char('n')));
-        assert_eq!(app.docs.len(), 1, "closed last tab replaced by fresh untitled");
+        assert_eq!(
+            app.docs.len(),
+            1,
+            "closed last tab replaced by fresh untitled"
+        );
         assert!(app.doc().path().is_none());
         assert_eq!(
             std::fs::read_to_string(&path).expect("untouched"),
@@ -885,5 +1042,103 @@ mod tests {
         app.on_key(ctrl(KeyCode::PageDown));
         assert_eq!(app.doc().line(0), "xy");
         assert_eq!((app.cursor_line, app.cursor_col), (0, 2));
+    }
+
+    #[test]
+    fn typing_burst_undone_in_one_step() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hola");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(0), "", "whole typed run goes in one Ctrl+Z");
+        assert_eq!((app.cursor_line, app.cursor_col), (0, 0));
+    }
+
+    #[test]
+    fn undo_redo_roundtrip() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hola");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        app.on_key(ctrl(KeyCode::Char('y')));
+        assert_eq!(app.doc().line(0), "hola");
+        assert_eq!(app.cursor_col, 4, "redo leaves the cursor after the text");
+    }
+
+    #[test]
+    fn enter_and_type_break_into_separate_steps() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "ab");
+        app.on_key(plain(KeyCode::Enter));
+        typed(&mut app, "cd");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line_count(), 2);
+        assert_eq!(app.doc().line(0), "ab");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line_count(), 1);
+        assert_eq!(app.doc().line(0), "ab");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(0), "");
+    }
+
+    #[test]
+    fn backspace_closes_the_typing_burst() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "abc");
+        app.on_key(plain(KeyCode::Backspace));
+        typed(&mut app, "de");
+        assert_eq!(app.doc().line(0), "abde");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(0), "ab", "burst closed by backspace");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(0), "abc", "backspace itself is undoable");
+    }
+
+    #[test]
+    fn redo_is_cleared_by_a_new_edit() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "ab");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        typed(&mut app, "x");
+        app.on_key(ctrl(KeyCode::Char('y')));
+        assert_eq!(app.doc().line(0), "x", "redo stack cleared by new edit");
+    }
+
+    #[test]
+    fn undo_is_bounded() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        for _ in 0..150 {
+            app.on_key(plain(KeyCode::Char('a')));
+            app.on_key(plain(KeyCode::Backspace));
+        }
+        assert!(
+            app.histories[0].undo.len() <= UNDO_LIMIT,
+            "history must stay bounded"
+        );
+    }
+
+    #[test]
+    fn histories_are_per_tab() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        typed(&mut app, "aaa");
+        app.on_key(ctrl(KeyCode::PageDown));
+        typed(&mut app, "bbb");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(0), "", "own history: whole burst undone");
+        app.on_key(ctrl(KeyCode::PageUp));
+        assert_eq!(app.doc().line(0), "aaa", "other tab history untouched");
+    }
+
+    #[test]
+    fn overwrite_typing_undone_in_one_step() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "abc");
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(plain(KeyCode::Insert));
+        app.on_key(plain(KeyCode::Char('X')));
+        assert_eq!(app.doc().line(0), "Xbc");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(0), "abc", "replace + insert undo together");
     }
 }

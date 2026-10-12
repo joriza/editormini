@@ -66,10 +66,10 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Key::LnCol) => "Ln {ln}, Col {col}",
         (Lang::Es, Key::LnCol) => "Ln {ln}, Col {col}",
         (Lang::En, Key::StartupHints) => {
-            "F2/Ctrl+S save \u{b7} Ctrl+Q quit \u{b7} Ins overwrite \u{b7} Ctrl+PgUp/PgDn switch tab"
+            "F2/Ctrl+S save \u{b7} Ctrl+Z undo \u{b7} Ctrl+Q quit \u{b7} Ins overwrite \u{b7} Ctrl+PgUp/PgDn switch tab"
         }
         (Lang::Es, Key::StartupHints) => {
-            "F2/Ctrl+S guardar \u{b7} Ctrl+Q salir \u{b7} Ins sobrescribir \u{b7} Ctrl+PgUp/PgDn cambiar pesta\u{f1}a"
+            "F2/Ctrl+S guardar \u{b7} Ctrl+Z deshacer \u{b7} Ctrl+Q salir \u{b7} Ins sobrescribir \u{b7} Ctrl+PgUp/PgDn cambiar pesta\u{f1}a"
         }
         (Lang::En, Key::OverwriteOn) => "Overwrite ON",
         (Lang::Es, Key::OverwriteOn) => "Sobrescribir ACTIVADO",

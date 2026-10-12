@@ -15,13 +15,13 @@
 - [x] **5. Tabs** — tab bar UI (render + Ctrl+PgUp/PgDn done in task 4), Ctrl+1/2 panel jump, Ctrl+W close with unsaved prompt (i18n), per-document cursor restore. **Verify:** tests + **USER RUNS IT**. **Commit:** `58c1fa6` (44 tests green; typed ConfirmKind modal; found+fixed Quit+N no-op during refactor; closing last tab leaves fresh untitled)
 - [ ] **6. Language registry + theme** — syntect curated set (Rust, Go, JS/TS, Python, C/C++, JSON, TOML, YAML, MD, HTML/CSS, XML, Shell), extension match; external grammar loading path (`languages/`); Theme struct: syntax theme (Dark+ calco) + chrome theme (ratatui Styles), Light+ stub. Visible-lines-only highlighting. **Verify:** tests + **USER RUNS IT** on .rs/.md/.json. **Commit:** (pending)
 - [ ] **7. i18n complete** — full EN/ES catalog coverage audit (every user-visible string); `--lang` + config both switch; missing-key fails visible in dev. **Verify:** run in both languages. **Commit:** (pending)
-- [ ] **8. File cycle** — Ctrl+S save (line endings/BOM respected), Ctrl+O open, Ctrl+Q quit with unsaved prompt, multi-file CLI args open as tabs. **Verify:** **USER RUNS IT**. **Commit:** (pending)
+- [ ] **8. File cycle** — Ctrl+S save (line endings/BOM respected), **Ctrl+Shift+S save all modified tabs (owner request)**, Ctrl+O open, Ctrl+Q quit with unsaved prompt, multi-file CLI args open as tabs. **Verify:** **USER RUNS IT**. **Commit:** (pending)
 - [ ] **9. Basic mouse** — click to place cursor, click tab to switch, wheel scroll. **Verify:** **USER RUNS IT**. **Commit:** (pending)
 - [ ] **10. Status bar** — file name, line:col, modified flag, language indicator; theme-styled. **Verify:** run. **Commit:** (pending)
 - [x] **11. Portable release** — `cargo build --release`; single-exe sanity (no runtime deps beyond Windows); README (usage, config, keymap); final user acceptance run. **Verify:** exe runs standalone. **Commit:** (pending) — README.md in Spanish + docs/ (plan, avances, hallazgos) delivered EARLY at owner request (`docs` commit); release build + acceptance run remain.
 
 ## Keymap (hito 1)
-Ctrl+PgDn/PgUp next/prev doc (wrap, cross-panel-ready) · Ctrl+1/2 last doc of panel 1/2 · Ctrl+W close tab · Ctrl+S/O/Q save/open/quit · Ctrl+Z/Y undo/redo · F-key fallbacks if terminal swallows chords.
+Ctrl+PgDn/PgUp next/prev doc (wrap, cross-panel-ready) · Ctrl+1/2 last doc of panel 1/2 · Ctrl+W close tab · Ctrl+S/O/Q save/open/quit · Ctrl+Z/Y undo/redo (done, task 3) · Ctrl+Shift+S save all (PENDING, task 8) · F-key fallbacks if terminal swallows chords.
 
 ## Out of scope (hito 1)
 Command palette, sidebar, split UI, LSP/linter, MD preview, PDF export, Typst, settings UI. Config file: `editormini.json` only.

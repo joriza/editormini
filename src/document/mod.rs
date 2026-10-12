@@ -87,20 +87,30 @@ pub enum EditRecord {
 
 impl EditRecord {
     /// The edit that undoes this one.
-    /// Wired by the bounded-undo milestone task (next); kept tested until then.
-    #[allow(dead_code)]
     pub fn inverse(&self) -> EditRecord {
         match self {
             EditRecord::Insert { line, col, text } => {
                 let segments: Vec<&str> = text.split('\n').collect();
-                let end_line = line + segments.len() - 1;
-                let end_col = segments.last().map(|s| s.chars().count()).unwrap_or(0);
-                EditRecord::Delete {
-                    start_line: *line,
-                    start_col: *col,
-                    end_line,
-                    end_col,
-                    text: text.clone(),
+                if segments.len() == 1 {
+                    // Single-line insert: the removed span ends on the SAME
+                    // line at col + length.
+                    EditRecord::Delete {
+                        start_line: *line,
+                        start_col: *col,
+                        end_line: *line,
+                        end_col: col + segments[0].chars().count(),
+                        text: text.clone(),
+                    }
+                } else {
+                    // Multi-line insert: the last segment starts at column 0
+                    // of its new line, so it ends at its own length.
+                    EditRecord::Delete {
+                        start_line: *line,
+                        start_col: *col,
+                        end_line: line + segments.len() - 1,
+                        end_col: segments.last().map(|s| s.chars().count()).unwrap_or(0),
+                        text: text.clone(),
+                    }
                 }
             }
             EditRecord::Delete {
@@ -371,8 +381,6 @@ impl Document {
 
     /// Apply a record (typically `record.inverse()` from the undo stack) and
     /// return the record of what was applied.
-    /// Wired by the bounded-undo milestone task (next); kept tested until then.
-    #[allow(dead_code)]
     pub fn apply(&mut self, record: &EditRecord) -> Result<EditRecord, DocumentError> {
         match record {
             EditRecord::Insert { line, col, text } => self.insert(*line, *col, text),
@@ -605,6 +613,18 @@ mod tests {
             doc.insert(0, 99, "x"),
             Err(DocumentError::OutOfBounds { line: 0, col: 99 })
         ));
+    }
+
+    #[test]
+    fn single_line_insert_inverse_reproduces_original() {
+        // Regression: the inverse of a single-line insert used to end at the
+        // segment LENGTH instead of col + length, so undo deleted nothing.
+        let mut doc = Document::new_untitled();
+        doc.insert(0, 0, "ac").expect("seed");
+        let record = doc.insert(0, 1, "b").expect("insert");
+        assert_eq!(doc.line(0), "abc");
+        doc.apply(&record.inverse()).expect("undo");
+        assert_eq!(doc.line(0), "ac");
     }
 
     #[test]
