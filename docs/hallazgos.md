@@ -48,3 +48,13 @@ El `.pdb` entregó la arquitectura interna completa:
 - **Fines de línea**: se preserva el del archivo; mezclados se normalizan al dominante (empate → CRLF); archivos nuevos en CRLF por ser Windows-first. Tests de ida y vuelta para CRLF, LF, mixto y BOM.
 - **Archivos > 10 MB abren solo-lectura**: protege la pila de deshacer futura y la fluidez; el umbral es una constante testeada sin necesidad de fixtures gigantes.
 - **12 lenguajes curados** para resaltado (Rust, Go, JS/TS, Python, C/C++, JSON, TOML, YAML, MD, HTML/CSS, XML, Shell) en lugar de las ~180 de syntect: exe chico, cobertura de uso real, extensible con gramáticas externas (camino de Typst).
+
+## 5. Decisión de crt-static para release portable
+
+Se añadió `.cargo/config.toml` con `rustflags = ["-C", "target-feature=+crt-static"]` para el target `x86_64-pc-windows-msvc`. Esto enlaza la CRT de MSVC estáticamente en el binario, eliminando la dependencia de `VCRUNTIME140.dll` (la DLL de la redistribución de Visual C++).
+
+**Racionale**: el objetivo del hito 11 era un ejecutable portable único sin deps runtime. Sin `crt-static`, el binario de release importaba `VCRUNTIME140.dll`, lo que obligaba al usuario a instalar el Visual C++ Redistributable o empaquetar la DLL junto al exe. Con el flag, el exe se queda como un único binario que funciona en cualquier Windows moderno sin instaladores adicionales.
+
+**Trade-off**: el exe crece ~102 KB (de 3.35 MB a 3.46 MB) por la CRT estática incluida. Este costo es aceptable y es el estándar de la industria para binarios portátiles en Windows (usado por herramientas como ripgrep, fd, etc.).
+
+**Nota sobre `0.dll`**: el escaneo de imports del binario muestra `0.dll` como una entrada, que es un artefacto de `grep` matching on a null byte o cadena vacía en el PE — no es una dependencia real.

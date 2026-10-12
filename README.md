@@ -13,6 +13,8 @@ cargo build --release
 # El ejecutable queda en target/release/editormini.exe
 ```
 
+> El ejecutable de release es **totalmente estático** (CRT enlazado estático): no requiere la redistribución de Visual C++ (VCRUNTIME140.dll) ni ninguna dependencia runtime adicional más allá de Windows mismo.
+
 ## Usar
 
 ```bash
