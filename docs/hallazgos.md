@@ -1,0 +1,46 @@
+# Hallazgos del proyecto
+
+Lo que el análisis y el desarrollo fueron dejando: hallazgos de ingeniería inversa, defectos encontrados (y su lección), y decisiones con dato.
+
+## 1. Ingeniería inversa de los editores de referencia
+
+Método: CLI de REA v6.4.0 (`inspect-artifact` para identidad PE con digest), sondeo de cadenas del binario, y el `.pdb` incluido en la distribución de MS Edit. Ghidra no estaba configurado en esta máquina (requiere descarga de 12.1.x + addon nativo de Windows de REA sin construir); como ambos editores son open source, se decidió correlacionar binario + fuentes públicas en lugar de decompilar.
+
+### micro 2.0.15 (referencia de Go)
+
+- Go 1.23.12 + **tcell** + **gopher-lua** (plugins en Lua), símbolos Go visibles en el binario.
+- Lecciones para editormini: keymap centralizado, sistema de comandos, plugins como extensión.
+
+### Microsoft Edit 2.0.0 (referencia de Rust)
+
+El `.pdb` entregó la arquitectura interna completa:
+
+- **TUI propia**: `tui.rs`, `framebuffer.rs`, `input.rs`, `vt.rs`, `cell.rs` — no usan ratatui/crossterm; construyeron su propio framebuffer VT. Confirma que el techo de rendimiento en TUI está en controlar el render fino (nosotros llegamos antes con ratatui y podemos bajar de nivel después).
+- **`gap_buffer.rs`**: el texto vive en un gap buffer, no en rope ni en Vec de líneas. Validó nuestra decisión de aislar el almacenamiento detrás de una API estable para cambiarlo sin tocar la UI.
+- **`lsh/`** (resaltado con definiciones generadas), **`fuzzy.rs`** (buscador difuso), separación de dibujo en `draw_menubar/draw_editor/draw_statusbar/draw_filepicker`, localización integrada, SIMD para escaneo de líneas.
+- CLI `edit [FILE[:LINE[:COLUMN]]]` — patrón adoptado para nuestro soporte multi-archivo.
+
+## 2. Defectos encontrados y su lección
+
+| Defecto | Síntoma que vio el dueño | Causa raíz | Corrección | Lección |
+|---|---|---|---|---|
+| **Cursor pisado en `insert_text`** (crítico) | "Al escribir siempre como si estuviera en modo insertar": el texto se revolvía desde el segundo carácter ("hola"→"halo") | El código asignaba `cursor_col = len(último segmento)` en vez de **avanzar** `cursor_col += len`; tras cada tecla el cursor saltaba a la columna 1 | Avance correcto por segmento único; colocación al fin del texto pegado en multi-línea | Los tests que manejan la app **tecla por tecla** (`App::on_key`) atrapan bugs que los tests de modelo no ven; se quedó como red de regresión del keymap |
+| Mensajes de estado efímeros | "Ctrl+S no parecía grabar" | El status se limpiaba en cada frame: "Saved" duraba un parpadeo | El mensaje persiste hasta la próxima acción de edición | El feedback que no se alcanza a leer es equivalente a no tener feedback |
+| Guardar sin destino | Guardar un documento sin título no hacía nada visible | Documento sin ruta + error invisible por el punto anterior | Error persistente en pantalla; (Guardar Como llega en el hito de ciclo de archivos) | Nombrar el destino antes de prometer el guardado |
+| `Ctrl+S` "no llegaba" | En Git Bash/mintty el guardado no respondía | **Control de flujo del terminal**: mintty consume Ctrl+S (XOFF) antes de que llegue a la app | `F2` como guardado universal + recomendación de Windows Terminal en README | En TUI, toda tecla crítica necesita una alternativa inmune al terminal |
+| `Ctrl+Q → N` sin efecto | (detectado en tests, no llegó al dueño) | En el refactor del modal a enum, el brazo Quit+N quedó sin handler | Brazo restaurado + test | Los refactors de máquinas de estado necesitan tests que recorran **todas** las transiciones |
+| Doble coma en catálogo i18n | Errores fantasma de compilación en otro archivo | Un error de sintaxis en `i18n.rs` dejaba `Lang` sin resolver y cascadaaba a `config.rs` | Fix de la coma | Un defecto de sintaxis puede disfrazarse de error semántico en archivos vecinos |
+
+## 3. Aprendizajes de proceso
+
+- **Falsos positivos del chequeo de diagnósticos de sesión**: reportó varias rondas un `Lang: Default` inexistente en `config.rs`. Se desmintió con dos autoridades: el compilador (`cargo check`, para quien un trait bound sin satisfacer es error de compilación) y sondas LSP frescas (`source=lsp`). El cache de sesión se sincronizaba recién después de nuevas escrituras. Lección: ante desacuerdo entre cache y compilador, el compilador manda; documentar y seguir.
+- **Delegación a subagentes**: `gentle-ai-worker` rechazó la admisión dos veces ("Writer session Git authority changed before admission"). Se aplicó el plan B de la escalera de ruteo (implementación inline) sin bloquear el trabajo.
+- **Autoridad de review**: el ciclo de revisión formal (RDD) no pudo inicializarse porque la autoridad Git de la sesión cambió a mitad de camino (el repo se creó durante la sesión). El candidato quedó declarado **sin revisión formal**; la verificación efectiva fue la red de tests + prueba interactiva del dueño. Re-abrir la sesión con el repo ya existente habilita la revisión formal si se desea.
+- **Prueba del dueño como puerta**: el criterio "pará cuando haya algo que pueda probar" detectó en uso real los dos defectos más importantes de esta etapa. El orden de tareas se ajustó para maximizar esas instancias de verificación.
+
+## 4. Decisiones con dato
+
+- **UTF-8 únicamente** en el hito 1, con BOM detectado y preservado: cubre el uso real; UTF-16 queda fuera de alcance explícito.
+- **Fines de línea**: se preserva el del archivo; mezclados se normalizan al dominante (empate → CRLF); archivos nuevos en CRLF por ser Windows-first. Tests de ida y vuelta para CRLF, LF, mixto y BOM.
+- **Archivos > 10 MB abren solo-lectura**: protege la pila de deshacer futura y la fluidez; el umbral es una constante testeada sin necesidad de fixtures gigantes.
+- **12 lenguajes curados** para resaltado (Rust, Go, JS/TS, Python, C/C++, JSON, TOML, YAML, MD, HTML/CSS, XML, Shell) en lugar de las ~180 de syntect: exe chico, cobertura de uso real, extensible con gramáticas externas (camino de Typst).
