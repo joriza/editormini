@@ -31,12 +31,14 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | Flechas, Home, End, PgUp, PgDn | mover el cursor |
 | Escribir, Enter, Backspace, Delete | editar texto |
 | `Insert` | alternar modo sobrescribir (indicador `OVR`) |
-| `Ctrl+S` o `F2` | guardar |
+| `Ctrl+S` o `F2` | guardar (en pestaña sin título abre Guardar como) |
 | `Ctrl+Q` | salir (pregunta si hay cambios sin guardar: Y/N/C — acepta S en español) |
 | `Ctrl+W` | cerrar pestaña (pregunta si hay cambios) |
 | `Ctrl+PgDn` / `Ctrl+PgUp` | pestaña siguiente / anterior (cicla) |
 | `Ctrl+1` | ir al último documento del panel 1 (`Ctrl+2` reservada para el panel 2) |
 | `Ctrl+Z` / `Ctrl+Y` | deshacer / rehacer (historial acotado por pestaña; cada tanda de tipeo es un paso) |
+| `F3` / `Ctrl+Shift+S` | guardar todo (pestañas con ruta; omite sin título) |
+| `Ctrl+O` | abrir archivo (prompt de ruta) |
 
 ## Configuración
 

@@ -5,7 +5,7 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 ## Estado actual
 
 - **Hito 1**: 4 de 11 tareas completadas (1, 2, 4 y 5; la 3 —deshacer— se reordenó después de la 5 a pedido del dueño para tener algo probable antes).
-- **Verificación**: 44/44 tests, build con 0 warnings.
+- **Verificación**: 78/78 tests, build con 0 warnings.
 - **Verificado por el dueño**: escritura correcta, guardado, prompt de salida, `●` de modificado en pestañas.
 
 ## Cronología
@@ -17,6 +17,7 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 | 2026-10-12 | `d2f16c9` | Documentación de evidencia y aclaración de config en desarrollo | — |
 | 2026-10-12 | `19547c5` | **Ronda de bugs del dueño**: cursor que reescribía el texto (crítico), mensajes de estado efímeros, guardado sin destino visible, `F2` como guardado universal, modo sobrescribir con `Insert` | 37 tests; corregido y aprobado por el dueño |
 | 2026-10-12 | `58c1fa6` | Tarea 5 — Cierre de pestaña con prompt (`Ctrl+W`), salto de panel (`Ctrl+1/2`), cursor por pestaña; detectado y corregido `Ctrl+Q → N` sin efecto | 44 tests; aprobado por el dueño |
+| 2026-10-12 | — | Tarea 8 — Ciclo de archivos: PromptKind{OpenFile,SaveAs} prompt state machine, Ctrl+Shift+S/F3 save_all, Ctrl+O open prompt, Ctrl+S on modified untitled opens SaveAs, Document::save_as, i18n keys (OpenFile, SaveAs, SavedAll, NoModifiedFiles, FileOpened, SavedAs) | 78 tests; build 0 warnings |
 
 ## Reordenamientos decididos
 

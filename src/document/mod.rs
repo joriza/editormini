@@ -208,6 +208,13 @@ impl Document {
         bytes > READ_ONLY_THRESHOLD
     }
 
+    /// Save to a new path, adopting it as the document's path.
+    /// BOM and line-ending rules apply unchanged from [`save`].
+    pub fn save_as(&mut self, path: impl Into<PathBuf>) -> Result<u64, DocumentError> {
+        self.path = Some(path.into());
+        self.save()
+    }
+
     // -- Accessors ---------------------------------------------------------
 
     pub fn line_count(&self) -> usize {

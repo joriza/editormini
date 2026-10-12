@@ -7,6 +7,7 @@
 //! (highlight.rs + theme.rs). Mouse support arrives in a later task.
 
 use std::io;
+use std::path::PathBuf;
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, read};
@@ -30,6 +31,15 @@ pub enum ConfirmKind {
     Quit,
     /// Close the tab at this document index.
     CloseTab(usize),
+}
+
+/// What a pending text-input prompt is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    /// Open a file from disk.
+    OpenFile,
+    /// Save an untitled document to a new path.
+    SaveAs,
 }
 
 /// Cursor and scroll state saved per tab while another tab is focused.
@@ -80,6 +90,8 @@ pub struct App {
     pub quit: bool,
     /// Pending confirmation: quit the app or close one tab.
     pub confirm: Option<ConfirmKind>,
+    /// Pending text-input prompt: open file or save-as destination.
+    pub prompt: Option<(PromptKind, String)>,
     /// Overwrite mode (Insert key). Off by default: VS Code-style insertion.
     pub overwrite: bool,
     /// Transient status message. Persists until the next edit action or the
@@ -108,6 +120,7 @@ impl App {
             viewport_w: 1,
             quit: false,
             confirm: None,
+            prompt: None,
             overwrite: false,
             status: i18n::t(lang, Key::StartupHints).to_string(),
             lang,
@@ -358,8 +371,39 @@ impl App {
                     .unwrap_or_default();
                 self.status = format!("{} {path} ({bytes} B)", i18n::t(self.lang, Key::Saved));
             }
+            Err(DocumentError::Untitled) if self.doc().is_modified() => {
+                self.prompt = Some((PromptKind::SaveAs, String::new()));
+            }
             Err(e) => self.status = format!("{e}"),
         }
+    }
+
+    /// Save every modified tab that has a path. Modified untitled tabs
+    /// are left untouched. Simplest correct status feedback.
+    fn save_all(&mut self) {
+        let mut saved = 0;
+        let mut failure: Option<String> = None;
+        for i in 0..self.docs.len() {
+            if self.docs[i].is_modified() && self.docs[i].path().is_some() {
+                if let Err(e) = self.docs[i].save() {
+                    failure = Some(e.to_string());
+                    break;
+                }
+                saved += 1;
+            }
+        }
+        if let Some(e) = failure {
+            self.status = e;
+        } else if saved > 0 {
+            self.status = i18n::t(self.lang, Key::SavedAll).to_string();
+        } else {
+            self.status = i18n::t(self.lang, Key::NoModifiedFiles).to_string();
+        }
+    }
+
+    /// Open the text-input prompt for a file path.
+    fn open_file_prompt(&mut self) {
+        self.prompt = Some((PromptKind::OpenFile, String::new()));
     }
 
     fn request_quit(&mut self) {
@@ -445,24 +489,37 @@ impl App {
     // -- Events ------------------------------------------------------------
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        if self.prompt.is_some() {
+            self.on_prompt_key(key);
+            return;
+        }
         if self.confirm.is_some() {
             self.on_confirm_key(key.code);
             return;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match (key.code, ctrl) {
-            (KeyCode::Char('s' | 'S'), true) => self.save_active(),
-            (KeyCode::F(2), _) => self.save_active(),
-            (KeyCode::Char('q'), true) => self.request_quit(),
-            (KeyCode::Char('w'), true) => self.request_close(),
-            (KeyCode::Char('z'), true) => self.undo(),
-            (KeyCode::Char('Z'), true) => self.redo(),
-            (KeyCode::Char('y'), true) => self.redo(),
-            (KeyCode::Char('1'), true) => self.last_doc_of_panel(1),
-            (KeyCode::Char('2'), true) => self.last_doc_of_panel(2),
-            (KeyCode::PageDown, true) => self.next_doc(1),
-            (KeyCode::PageUp, true) => self.next_doc(-1),
-            (KeyCode::Insert, _) => {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        match (key.code, ctrl, shift) {
+            // Ctrl+Shift+S → save all (must precede plain Ctrl+S)
+            (KeyCode::Char('s' | 'S'), true, true) => self.save_all(),
+            // Ctrl+S → save active
+            (KeyCode::Char('s' | 'S'), true, _) => self.save_active(),
+            // F2 → save active
+            (KeyCode::F(2), _, _) => self.save_active(),
+            // F3 → save all (fallback for Ctrl+Shift+S on Windows)
+            (KeyCode::F(3), _, _) => self.save_all(),
+            // Ctrl+O → open file prompt
+            (KeyCode::Char('o' | 'O'), true, _) => self.open_file_prompt(),
+            (KeyCode::Char('q'), true, _) => self.request_quit(),
+            (KeyCode::Char('w'), true, _) => self.request_close(),
+            (KeyCode::Char('z'), true, _) => self.undo(),
+            (KeyCode::Char('Z'), true, _) => self.redo(),
+            (KeyCode::Char('y'), true, _) => self.redo(),
+            (KeyCode::Char('1'), true, _) => self.last_doc_of_panel(1),
+            (KeyCode::Char('2'), true, _) => self.last_doc_of_panel(2),
+            (KeyCode::PageDown, true, _) => self.next_doc(1),
+            (KeyCode::PageUp, true, _) => self.next_doc(-1),
+            (KeyCode::Insert, _, _) => {
                 self.overwrite = !self.overwrite;
                 let key = if self.overwrite {
                     Key::OverwriteOn
@@ -471,11 +528,11 @@ impl App {
                 };
                 self.status = i18n::t(self.lang, key).to_string();
             }
-            (KeyCode::Char(c), false) => self.type_char(c),
-            (KeyCode::Enter, _) => self.insert_text("\n", false),
-            (KeyCode::Backspace, _) => self.backspace(),
-            (KeyCode::Delete, _) => self.delete_forward(),
-            (KeyCode::Left, _) => {
+            (KeyCode::Char(c), false, _) => self.type_char(c),
+            (KeyCode::Enter, _, _) => self.insert_text("\n", false),
+            (KeyCode::Backspace, _, _) => self.backspace(),
+            (KeyCode::Delete, _, _) => self.delete_forward(),
+            (KeyCode::Left, _, _) => {
                 if self.cursor_col > 0 {
                     self.cursor_col -= 1;
                 } else if self.cursor_line > 0 {
@@ -484,7 +541,7 @@ impl App {
                 }
                 self.clamp_scroll();
             }
-            (KeyCode::Right, _) => {
+            (KeyCode::Right, _, _) => {
                 if self.cursor_col < self.doc().line_len(self.cursor_line) {
                     self.cursor_col += 1;
                 } else if self.cursor_line + 1 < self.doc().line_count() {
@@ -493,32 +550,32 @@ impl App {
                 }
                 self.clamp_scroll();
             }
-            (KeyCode::Up, _) => {
+            (KeyCode::Up, _, _) => {
                 self.cursor_line = self.cursor_line.saturating_sub(1);
                 self.clamp_cursor();
                 self.clamp_scroll();
             }
-            (KeyCode::Down, _) => {
+            (KeyCode::Down, _, _) => {
                 self.cursor_line += 1;
                 self.clamp_cursor();
                 self.clamp_scroll();
             }
-            (KeyCode::Home, _) => {
+            (KeyCode::Home, _, _) => {
                 self.cursor_col = 0;
                 self.clamp_scroll();
             }
-            (KeyCode::End, _) => {
+            (KeyCode::End, _, _) => {
                 self.cursor_col = self.doc().line_len(self.cursor_line);
                 self.clamp_scroll();
             }
-            (KeyCode::PageUp, _) => {
+            (KeyCode::PageUp, _, _) => {
                 self.cursor_line = self
                     .cursor_line
                     .saturating_sub(self.viewport_h.saturating_sub(1));
                 self.clamp_cursor();
                 self.clamp_scroll();
             }
-            (KeyCode::PageDown, _) => {
+            (KeyCode::PageDown, _, _) => {
                 self.cursor_line += self.viewport_h.saturating_sub(1);
                 self.clamp_cursor();
                 self.clamp_scroll();
@@ -579,6 +636,74 @@ impl App {
             }
             (_, KeyCode::Char('c' | 'C')) | (_, KeyCode::Esc) => self.confirm = None,
             _ => {}
+        }
+    }
+
+    /// Handle keys while a text-input prompt is active.
+    fn on_prompt_key(&mut self, key: KeyEvent) {
+        let Some((kind, input)) = &mut self.prompt else {
+            return;
+        };
+        match key.code {
+            KeyCode::Enter => {
+                let path = input.clone();
+                let kind = *kind;
+                self.prompt = None;
+                self.handle_prompt_confirm(&kind, &path);
+            }
+            KeyCode::Esc => {
+                self.prompt = None;
+            }
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Char(c)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                input.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    /// Act on the confirmed path in a prompt.
+    fn handle_prompt_confirm(&mut self, kind: &PromptKind, path: &str) {
+        match kind {
+            PromptKind::OpenFile => {
+                let pathbuf = PathBuf::from(path);
+                if pathbuf.exists() {
+                    match Document::from_path(&pathbuf) {
+                        Ok(doc) => {
+                            self.docs.push(doc);
+                            self.views.push(DocView::default());
+                            self.histories.push(History::new());
+                            self.status = i18n::tr(self.lang, Key::FileOpened, &[("path", path)]);
+                        }
+                        Err(e) => {
+                            self.status = e.to_string();
+                        }
+                    }
+                } else {
+                    // New file: create untitled with path.
+                    self.docs.push(Document::new_with_path(&pathbuf));
+                    self.views.push(DocView::default());
+                    self.histories.push(History::new());
+                    self.status = i18n::tr(self.lang, Key::FileOpened, &[("path", path)]);
+                }
+            }
+            PromptKind::SaveAs => {
+                match self.doc_mut().save_as(path) {
+                    Ok(bytes) => {
+                        self.status = i18n::tr(self.lang, Key::SavedAs, &[("path", path)]);
+                        // Append byte count like save_active does.
+                        self.status = format!("{} {bytes} B", self.status);
+                    }
+                    Err(e) => {
+                        self.status = e.to_string();
+                    }
+                }
+            }
         }
     }
 
@@ -671,6 +796,20 @@ impl App {
     }
 
     fn draw_status(&mut self, f: &mut Frame, area: ratatui::prelude::Rect) {
+        if let Some((kind, input)) = &self.prompt {
+            let title = match kind {
+                PromptKind::OpenFile => i18n::t(self.lang, Key::OpenFile),
+                PromptKind::SaveAs => i18n::t(self.lang, Key::SaveAs),
+            };
+            let text = format!("{}{input}", title);
+            let widget = Paragraph::new(text).style(
+                Style::new()
+                    .fg(self.theme.prompt_fg)
+                    .bg(self.theme.prompt_bg),
+            );
+            f.render_widget(widget, area);
+            return;
+        }
         if self.confirm.is_some() {
             let prompt = i18n::t(self.lang, Key::SaveChangesPrompt);
             let widget = Paragraph::new(prompt).style(
@@ -800,34 +939,42 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_s_on_untitled_shows_persistent_error() {
+    fn ctrl_s_on_modified_untitled_opens_save_as_prompt() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         typed(&mut app, "draft");
         app.on_key(ctrl(KeyCode::Char('s')));
-        assert!(
-            app.status.contains("file path"),
-            "error must be visible, got: {}",
-            app.status
+        assert_eq!(
+            app.prompt,
+            Some((PromptKind::SaveAs, String::new())),
+            "Ctrl+S on modified untitled must open SaveAs prompt"
         );
         assert!(
             app.doc().is_modified(),
             "untitled save must not lose changes"
         );
+        assert!(
+            app.status.is_empty(),
+            "prompt replaces the status, got: {}",
+            app.status
+        );
     }
 
     #[test]
     fn status_persists_until_next_edit_action() {
-        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        let dir = temp_dir("status");
+        let path = dir.join("status.txt");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
         typed(&mut app, "abc");
         app.on_key(ctrl(KeyCode::Char('s')));
-        let error = app.status.clone();
-        assert!(!error.is_empty());
+        let saved = app.status.clone();
+        assert!(!saved.is_empty());
         // Cursor movement keeps the message visible...
         app.on_key(plain(KeyCode::Left));
-        assert_eq!(app.status, error);
+        assert_eq!(app.status, saved);
         // ...but the next edit action clears it.
         app.on_key(plain(KeyCode::Char('x')));
         assert!(app.status.is_empty());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1143,5 +1290,271 @@ mod tests {
         assert_eq!(app.doc().line(0), "Xbc");
         app.on_key(ctrl(KeyCode::Char('z')));
         assert_eq!(app.doc().line(0), "abc", "replace + insert undo together");
+    }
+
+    // -- Task 8: save_all / Ctrl+Shift+S / F3 -------------------------
+
+    #[test]
+    fn ctrl_shift_s_saves_all_pathed_modified_tabs() {
+        let dir = temp_dir("saveall");
+        let path_a = dir.join("a.txt");
+        let path_b = dir.join("b.txt");
+        std::fs::write(&path_a, "").expect("pre-create");
+        std::fs::write(&path_b, "").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::new_with_path(&path_a),
+                Document::new_with_path(&path_b),
+                Document::new_untitled(),
+            ],
+            Lang::En,
+        );
+        // Modify all three tabs
+        typed(&mut app, "content A");
+        app.on_key(ctrl(KeyCode::PageDown));
+        typed(&mut app, "content B");
+        app.on_key(ctrl(KeyCode::PageDown));
+        typed(&mut app, "untitled content");
+        // Ctrl+Shift+S saves pathed modified tabs, skips untitled
+        app.on_key(press(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert!(
+            app.status.contains("All files saved"),
+            "status: {}",
+            app.status
+        );
+        // Pathed tabs should be clean
+        app.on_key(ctrl(KeyCode::PageUp));
+        app.on_key(ctrl(KeyCode::PageUp));
+        assert!(!app.doc().is_modified(), "tab A should be saved and clean");
+        app.on_key(ctrl(KeyCode::PageDown));
+        assert!(!app.doc().is_modified(), "tab B should be saved and clean");
+        // Untitled tab is still modified (skipped by save_all)
+        app.on_key(ctrl(KeyCode::PageDown));
+        assert!(
+            app.doc().is_modified(),
+            "untitled tab should still be modified (skipped)"
+        );
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn f3_saves_all_too() {
+        let dir = temp_dir("f3saveall");
+        let path = dir.join("f3.txt");
+        std::fs::write(&path, "").expect("pre-create");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
+        typed(&mut app, "f3 content");
+        app.on_key(plain(KeyCode::F(3)));
+        assert!(
+            app.status.contains("All files saved"),
+            "status: {}",
+            app.status
+        );
+        assert!(!app.doc().is_modified());
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ctrl_shift_s_before_ctrl_s_no_collision() {
+        let dir = temp_dir("collision");
+        let path = dir.join("collision.txt");
+        std::fs::write(&path, "").expect("pre-create");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
+        typed(&mut app, "first");
+        // Ctrl+Shift+S saves all (this one pathed tab)
+        app.on_key(press(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert!(
+            app.status.contains("All files saved"),
+            "status: {}",
+            app.status
+        );
+        assert!(!app.doc().is_modified());
+        // Modify again
+        typed(&mut app, " second");
+        // Ctrl+S saves active only
+        app.on_key(ctrl(KeyCode::Char('s')));
+        assert!(app.status.contains("Saved"), "status: {}", app.status);
+        assert!(!app.doc().is_modified());
+        let content = std::fs::read_to_string(&path).expect("reread");
+        assert_eq!(content, "first second\r\n");
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -- Task 8: Ctrl+O open prompt -----------------------------------
+
+    #[test]
+    fn ctrl_o_opens_open_file_prompt() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('o')));
+        assert_eq!(
+            app.prompt,
+            Some((PromptKind::OpenFile, String::new())),
+            "Ctrl+O must open OpenFile prompt"
+        );
+    }
+
+    #[test]
+    fn open_file_prompt_existing_file_opens_as_tab() {
+        let dir = temp_dir("openfile");
+        let path = dir.join("existing.txt");
+        std::fs::write(&path, "hello world").expect("pre-create");
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        // Open the prompt
+        app.on_key(ctrl(KeyCode::Char('o')));
+        assert_eq!(app.prompt, Some((PromptKind::OpenFile, String::new())));
+        // Type the path
+        let path_str = path.to_string_lossy().to_string();
+        typed(&mut app, &path_str);
+        // Confirm
+        app.on_key(plain(KeyCode::Enter));
+        // The file should be opened as a new tab (appends, doesn't switch focus)
+        assert_eq!(app.docs.len(), 2, "new tab opened");
+        assert_eq!(
+            app.docs.last().expect("new tab exists").line(0),
+            "hello world",
+            "content loaded"
+        );
+        assert!(app.prompt.is_none(), "prompt should be closed");
+        assert!(app.status.contains("Opened"), "status: {}", app.status);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_file_prompt_new_path_creates_untitled_with_path() {
+        let dir = temp_dir("opennew");
+        let path = dir.join("newfile.txt");
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        // Open the prompt
+        app.on_key(ctrl(KeyCode::Char('o')));
+        // Type a new path (file doesn't exist yet)
+        let path_str = path.to_string_lossy().to_string();
+        typed(&mut app, &path_str);
+        // Confirm
+        app.on_key(plain(KeyCode::Enter));
+        // Should create an untitled-with-path tab (appends, doesn't switch focus)
+        assert_eq!(app.docs.len(), 2, "new tab opened");
+        let new_doc = app.docs.last().expect("new tab exists");
+        assert_eq!(
+            new_doc.path(),
+            Some(path.as_path()),
+            "new tab has the new path"
+        );
+        assert_eq!(new_doc.line_count(), 1, "new file has one empty line");
+        assert!(app.prompt.is_none(), "prompt should be closed");
+        assert!(app.status.contains("Opened"), "status: {}", app.status);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn open_file_prompt_esc_cancels() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('o')));
+        assert!(app.prompt.is_some());
+        typed(&mut app, "/some/path");
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.prompt.is_none(), "Esc must close the prompt");
+        assert_eq!(app.docs.len(), 1, "no new tab opened");
+    }
+
+    // -- Task 8: SaveAs prompt flow -----------------------------------
+
+    #[test]
+    fn save_as_flow_writes_file_and_adopts_path() {
+        let dir = temp_dir("saveas");
+        let path = dir.join("saveas.txt");
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "save as content");
+        // Ctrl+S on modified untitled opens SaveAs prompt
+        app.on_key(ctrl(KeyCode::Char('s')));
+        assert_eq!(app.prompt, Some((PromptKind::SaveAs, String::new())));
+        // Type the path
+        let path_str = path.to_string_lossy().to_string();
+        typed(&mut app, &path_str);
+        // Confirm
+        app.on_key(plain(KeyCode::Enter));
+        // File should be written and tab should adopt the path
+        assert!(app.doc().path().is_some(), "tab should have a path now");
+        assert!(
+            !app.doc().is_modified(),
+            "save-as should clear modified flag"
+        );
+        let content = std::fs::read_to_string(&path).expect("file written");
+        assert_eq!(content, "save as content\r\n");
+        assert!(app.status.contains("Saved"), "status: {}", app.status);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_as_prompt_esc_cancels() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "unsaved");
+        // Ctrl+S on modified untitled opens SaveAs prompt
+        app.on_key(ctrl(KeyCode::Char('s')));
+        assert_eq!(app.prompt, Some((PromptKind::SaveAs, String::new())));
+        typed(&mut app, "/some/path");
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.prompt.is_none(), "Esc must close the SaveAs prompt");
+        assert!(app.doc().is_modified(), "content must be preserved");
+        assert!(app.doc().path().is_none(), "path must not be adopted");
+    }
+
+    // -- Task 8: on_prompt_key state machine --------------------------
+
+    #[test]
+    fn on_prompt_key_chars_append() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.prompt = Some((PromptKind::OpenFile, String::new()));
+        typed(&mut app, "/home/user/file.txt");
+        assert_eq!(
+            app.prompt,
+            Some((PromptKind::OpenFile, "/home/user/file.txt".to_string()))
+        );
+    }
+
+    #[test]
+    fn on_prompt_key_backspace_deletes() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.prompt = Some((PromptKind::OpenFile, "hello".to_string()));
+        app.on_key(plain(KeyCode::Backspace));
+        assert_eq!(app.prompt, Some((PromptKind::OpenFile, "hell".to_string())));
+    }
+
+    #[test]
+    fn on_prompt_key_enter_confirms() {
+        let dir = temp_dir("promptenter");
+        let path = dir.join("enter.txt");
+        std::fs::write(&path, "loaded content").expect("pre-create");
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.prompt = Some((PromptKind::OpenFile, path.to_string_lossy().to_string()));
+        app.on_key(plain(KeyCode::Enter));
+        assert!(app.prompt.is_none(), "prompt should close on Enter");
+        assert_eq!(app.docs.len(), 2, "file opened as new tab");
+        assert_eq!(
+            app.docs.last().expect("new tab exists").line(0),
+            "loaded content"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn on_prompt_key_esc_cancels() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.prompt = Some((PromptKind::SaveAs, "/some/path".to_string()));
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.prompt.is_none(), "Esc must cancel the prompt");
     }
 }
