@@ -803,9 +803,8 @@ impl App {
                 self.search_next_match();
             }
             // Printable characters: append to query, reset to first match.
-            (KeyCode::Char(c), false, false)
-                if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) =>
-            {
+            // Accept any shift state (crossterm delivers the shifted char in `c`).
+            (KeyCode::Char(c), false, _) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
                 if let Some(search) = &mut self.search {
                     search.query.push(c);
                 }
@@ -933,47 +932,72 @@ impl App {
     /// Compose styled spans for a line with search match highlights.
     /// Used by the renderer and by tests directly.
     fn compose_highlight_spans(
-        line_text: &str,
+        _line_text: &str,
         highlights: &[&MatchPos],
         current_idx: usize,
         search_match_bg: Color,
         search_current_match_bg: Color,
+        syntax_spans: &[Span<'static>],
     ) -> Vec<Span<'static>> {
-        let char_to_byte = |s: &str, char_idx: usize| -> usize {
-            s.char_indices()
-                .nth(char_idx)
-                .map(|(byte_idx, _)| byte_idx)
-                .unwrap_or(s.len())
-        };
-        let mut spans = Vec::new();
-        let mut last_char = 0;
-        for (hi, m) in highlights.iter().enumerate() {
-            let match_start_byte = char_to_byte(line_text, m.start_col);
-            let match_end_byte = char_to_byte(line_text, m.end_col);
-            if m.start_col > last_char {
-                let pre_byte = char_to_byte(line_text, last_char);
-                let pre_text = &line_text[pre_byte..match_start_byte];
-                spans.push(Span::styled(pre_text.to_string(), Style::default()));
+        if highlights.is_empty() {
+            return syntax_spans.to_vec();
+        }
+        let ranges: Vec<(usize, usize, Color)> = highlights
+            .iter()
+            .enumerate()
+            .map(|(hi, m)| {
+                let bg = if hi == current_idx {
+                    search_current_match_bg
+                } else {
+                    search_match_bg
+                };
+                (m.start_col, m.end_col, bg)
+            })
+            .collect();
+        let mut result = Vec::new();
+        let mut char_pos = 0;
+        for span in syntax_spans {
+            let text = span.content.as_ref();
+            let len = text.chars().count();
+            let start = char_pos;
+            let end = char_pos + len;
+            let mut splits = vec![0];
+            for &(ms, me, _) in &ranges {
+                if me <= start || ms >= end {
+                    continue;
+                }
+                let rs = ms.saturating_sub(start);
+                let re = (me - start).min(len);
+                if rs > 0 {
+                    splits.push(rs);
+                }
+                if re < len {
+                    splits.push(re);
+                }
             }
-            let is_current = hi == current_idx;
-            let bg = if is_current {
-                search_current_match_bg
-            } else {
-                search_match_bg
-            };
-            let match_text = &line_text[match_start_byte..match_end_byte];
-            spans.push(Span::styled(
-                match_text.to_string(),
-                Style::default().bg(bg),
-            ));
-            last_char = m.end_col;
+            splits.push(len);
+            splits.sort_unstable();
+            splits.dedup();
+            let mut prev = 0;
+            for &next in &splits[1..] {
+                let seg: String = text.chars().skip(prev).take(next - prev).collect();
+                let seg_start = start + prev;
+                let seg_end = start + next;
+                let mut seg_style = span.style;
+                for &(ms, me, bg) in &ranges {
+                    if seg_start >= ms && seg_end <= me {
+                        seg_style = seg_style.bg(bg);
+                        break;
+                    }
+                }
+                if !seg.is_empty() {
+                    result.push(Span::styled(seg, seg_style));
+                }
+                prev = next;
+            }
+            char_pos += len;
         }
-        if last_char < line_text.chars().count() {
-            let rest_byte = char_to_byte(line_text, last_char);
-            let rest = &line_text[rest_byte..];
-            spans.push(Span::styled(rest.to_string(), Style::default()));
-        }
-        spans
+        result
     }
 
     pub fn handle_event(&mut self, event: Event) {
@@ -1146,55 +1170,6 @@ impl App {
         let last = (self.scroll_top + self.viewport_h).min(self.doc().line_count());
         let gutter_w = self.gutter_width();
 
-        // Draw the search dialog bar at the top of the editor when open.
-        if let Some(search) = &self.search {
-            let query = &search.query;
-            let counter = if search.matches.is_empty() {
-                i18n::t(self.lang, Key::NoMatches).to_string()
-            } else {
-                let current = search.current_idx.map_or(0, |i| i + 1);
-                i18n::tr(
-                    self.lang,
-                    Key::MatchCounter,
-                    &[
-                        ("current", &current.to_string()),
-                        ("total", &search.matches.len().to_string()),
-                    ],
-                )
-            };
-            let hints = format!(
-                "{}  {}  {}  {}",
-                i18n::t(self.lang, Key::FindNext),
-                i18n::t(self.lang, Key::FindPrev),
-                i18n::t(self.lang, Key::FindClose),
-                i18n::t(self.lang, Key::FindOptions),
-            );
-            let dialog_text = format!(
-                "{}  {}  {}",
-                i18n::t(self.lang, Key::FindDialogTitle),
-                query,
-                counter
-            );
-            let line = Line::from(vec![
-                Span::styled(
-                    dialog_text,
-                    Style::default().fg(self.theme.fg).bg(self.theme.prompt_bg),
-                ),
-                Span::styled(
-                    format!("  {hints}"),
-                    Style::default()
-                        .fg(self.theme.line_number_fg)
-                        .bg(self.theme.prompt_bg),
-                ),
-            ]);
-            let widget = Paragraph::new(line).style(
-                Style::default()
-                    .fg(self.theme.prompt_fg)
-                    .bg(self.theme.prompt_bg),
-            );
-            f.render_widget(widget, area);
-        }
-
         let extension = highlight::extension_of(self.doc().path());
         let lines: Vec<&str> = (first..last).map(|i| self.doc().line(i)).collect();
         let styled =
@@ -1254,6 +1229,7 @@ impl App {
                         current_idx,
                         self.theme.search_match_bg,
                         self.theme.search_current_match_bg,
+                        &line.spans,
                     ));
                 } else {
                     spans.extend(line.spans);
@@ -1276,6 +1252,60 @@ impl App {
 
         let widget = Paragraph::new(gutter_lines);
         f.render_widget(widget, area);
+
+        // Build the search dialog widget early; render it after the
+        // text-lines so it appears on top of editor content.
+        let dialog_widget = self.search.as_ref().map(|search| {
+            let query = &search.query;
+            let counter = if search.matches.is_empty() {
+                i18n::t(self.lang, Key::NoMatches).to_string()
+            } else {
+                let current = search.current_idx.map_or(0, |i| i + 1);
+                i18n::tr(
+                    self.lang,
+                    Key::MatchCounter,
+                    &[
+                        ("current", &current.to_string()),
+                        ("total", &search.matches.len().to_string()),
+                    ],
+                )
+            };
+            let hints = format!(
+                "{}  {}  {}  {}",
+                i18n::t(self.lang, Key::FindNext),
+                i18n::t(self.lang, Key::FindPrev),
+                i18n::t(self.lang, Key::FindClose),
+                i18n::t(self.lang, Key::FindOptions),
+            );
+            let dialog_text = format!(
+                "{}  {}  {}",
+                i18n::t(self.lang, Key::FindDialogTitle),
+                query,
+                counter
+            );
+            let line = Line::from(vec![
+                Span::styled(
+                    dialog_text,
+                    Style::default().fg(self.theme.fg).bg(self.theme.prompt_bg),
+                ),
+                Span::styled(
+                    format!("  {hints}"),
+                    Style::default()
+                        .fg(self.theme.line_number_fg)
+                        .bg(self.theme.prompt_bg),
+                ),
+            ]);
+            Paragraph::new(line).style(
+                Style::default()
+                    .fg(self.theme.prompt_fg)
+                    .bg(self.theme.prompt_bg),
+            )
+        });
+
+        // Render the search dialog on top of editor content.
+        if let Some(dialog) = dialog_widget {
+            f.render_widget(dialog, area);
+        }
 
         let x = area.x + gutter_w as u16 + (self.cursor_col - self.col_off) as u16;
         let y = area.y + (self.cursor_line - self.scroll_top) as u16;
@@ -2821,25 +2851,25 @@ mod tests {
             start_col: 6,
             end_col: 10,
         }];
+        let plain_span = Span::styled(line_text.to_string(), Style::default());
+        let plain_span = Span::styled(line_text.to_string(), Style::default());
         let spans = App::compose_highlight_spans(
             line_text,
             &[],
             0,
             Color::Rgb(0x61, 0x32, 0x14),
             Color::Rgb(0x9E, 0x6A, 0x03),
+            &[plain_span.clone()],
         );
-        // No highlights when highlights slice is empty.
         assert!(spans.len() >= 1);
-        // Now with a highlight.
-        let highlights = vec![&matches[0]];
         let spans = App::compose_highlight_spans(
             line_text,
-            &highlights,
+            &[&matches[0]],
             0,
             Color::Rgb(0x61, 0x32, 0x14),
             Color::Rgb(0x9E, 0x6A, 0x03),
+            &[plain_span],
         );
-        // Should have at least 3 spans: before, match, after.
         assert!(spans.len() >= 3);
     }
 
@@ -2871,5 +2901,68 @@ mod tests {
         typed(&mut app, "RUST");
         assert_eq!(app.search.as_ref().unwrap().matches.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // R3-002
+    #[test]
+    fn shift_letter_appends_to_search_query() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        app.on_key(shift(KeyCode::Char('R')));
+        assert_eq!(app.search.as_ref().unwrap().query, "R");
+    }
+
+    // R3-004
+    #[test]
+    fn syntax_fg_preserved_on_non_match_segments() {
+        let line_text = "fn main() {}";
+        let syntax_spans = vec![
+            Span::styled("fn ", Style::default().fg(Color::Blue)),
+            Span::styled("main", Style::default().fg(Color::Yellow)),
+            Span::styled("() {}", Style::default().fg(Color::Blue)),
+        ];
+        let matches = vec![MatchPos {
+            line: 0,
+            start_col: 0,
+            end_col: 2,
+        }];
+        let spans = App::compose_highlight_spans(
+            line_text,
+            &[&matches[0]],
+            0,
+            Color::Rgb(0x61, 0x32, 0x14),
+            Color::Rgb(0x9E, 0x6A, 0x03),
+            &syntax_spans,
+        );
+        let fn_span = spans
+            .iter()
+            .find(|s| s.content.as_ref() == "fn")
+            .expect("fn");
+        assert_eq!(fn_span.style.bg, Some(Color::Rgb(0x9E, 0x6A, 0x03)));
+        assert_eq!(fn_span.style.fg, Some(Color::Blue));
+        let main_span = spans
+            .iter()
+            .find(|s| s.content.as_ref() == "main")
+            .expect("main");
+        assert_eq!(main_span.style.fg, Some(Color::Yellow));
+        assert_eq!(main_span.style.bg, None);
+    }
+
+    // R3-003
+    #[test]
+    fn search_dialog_renders_on_top_of_editor() {
+        let dir = temp_dir("search_dialog_draw_order");
+        let path = dir.join("search_draw_order.txt");
+        std::fs::write(&path, "hello world\nfoo bar baz\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "bar");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let dialog_cell = terminal.backend().buffer().get(0, 1);
+        assert_eq!(dialog_cell.symbol(), "F");
+        assert_eq!(dialog_cell.style().bg, Some(Color::Rgb(0xE2, 0xC0, 0x89)));
+        let _ = dir;
     }
 }
