@@ -299,6 +299,31 @@ impl App {
         self.selections[self.active] = None;
     }
 
+    /// Delete the active selection (when non-empty) as one undo step,
+    /// leaving the cursor at its start. Returns true when a selection was
+    /// deleted; false means there was nothing selected and the caller
+    /// should fall back to its single-character behavior.
+    fn delete_selected_range(&mut self) -> bool {
+        let Some(((sl, sc), (el, ec))) = self
+            .normalized_selection()
+            .filter(|((sl, sc), (el, ec))| sl != el || sc != ec)
+        else {
+            return false;
+        };
+        match self.doc_mut().delete_range(sl, sc, el, ec) {
+            Ok(record) => {
+                self.record_edits(vec![record], false);
+                self.cursor_line = sl;
+                self.cursor_col = sc;
+                self.clear_selection();
+                self.clamp_cursor();
+                self.clamp_scroll();
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     fn start_selection(&mut self) {
         if self.selections[self.active].is_none() {
             self.selections[self.active] = Some(Selection {
@@ -458,8 +483,9 @@ impl App {
     /// is removed.  A collapsed selection counts as no selection (VS Code
     /// treats Ctrl+X with an empty selection as cut-line).
     fn perform_cut(&mut self) {
-        let record = if let Some(((sl, sc), (el, ec))) =
-            self.normalized_selection().filter(|((sl, sc), (el, ec))| sl != el || sc != ec)
+        let record = if let Some(((sl, sc), (el, ec))) = self
+            .normalized_selection()
+            .filter(|((sl, sc), (el, ec))| sl != el || sc != ec)
         {
             self.doc_mut().delete_range(sl, sc, el, ec)
         } else {
@@ -1181,13 +1207,15 @@ impl App {
                 self.insert_text("\n", false);
             }
             (KeyCode::Backspace, _, _) => {
-                self.clear_selection();
-                self.backspace();
+                if !self.delete_selected_range() {
+                    self.backspace();
+                }
             }
-            // Plain Delete → delete forward
+            // Plain Delete → delete forward, or the selection when active
             (KeyCode::Delete, _, _) => {
-                self.clear_selection();
-                self.delete_forward();
+                if !self.delete_selected_range() {
+                    self.delete_forward();
+                }
             }
             // Esc → collapse selection
             (KeyCode::Esc, _, _) => self.clear_selection(),
@@ -5327,6 +5355,38 @@ mod tests {
         assert_eq!(app.cursor_col, 5);
     }
 
+    #[test]
+    fn backspace_deletes_the_active_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello world");
+        app.on_key(plain(KeyCode::Home));
+        for _ in 0..5 {
+            app.on_key(shift(KeyCode::Right));
+        }
+        // Select "hello", then Backspace must delete the WHOLE selection.
+        app.on_key(plain(KeyCode::Backspace));
+        assert_eq!(app.doc().line(0), " world");
+        assert_eq!(app.cursor_col, 0);
+        assert!(app.normalized_selection().is_none());
+        // One undo restores it (single step).
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(0), "hello world");
+    }
+
+    #[test]
+    fn delete_forward_deletes_the_active_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello world");
+        app.on_key(plain(KeyCode::End));
+        for _ in 0..5 {
+            app.on_key(shift(KeyCode::Left));
+        }
+        // Select "world", then Delete must delete the WHOLE selection.
+        app.on_key(plain(KeyCode::Delete));
+        assert_eq!(app.doc().line(0), "hello ");
+        assert_eq!(app.cursor_col, 6);
+    }
+
     // ============ T5: interactive open list ============
 
     #[test]
@@ -5384,7 +5444,10 @@ mod tests {
         app.on_key(plain(KeyCode::Down));
         assert_eq!(app.open_selected, 1);
         app.on_key(plain(KeyCode::Down));
-        assert_eq!(app.open_selected, 2, "clamped at the last candidate (3 files)");
+        assert_eq!(
+            app.open_selected, 2,
+            "clamped at the last candidate (3 files)"
+        );
         app.on_key(plain(KeyCode::Up));
         assert_eq!(app.open_selected, 1);
         app.on_key(plain(KeyCode::Up));
@@ -5459,7 +5522,11 @@ mod tests {
         app.on_key(ctrl(KeyCode::Char('c')));
         app.on_key(ctrl(KeyCode::End));
         app.on_key(ctrl(KeyCode::Char('v')));
-        assert!(app.doc().line(1).ends_with("beta"), "line1: {}", app.doc().line(1));
+        assert!(
+            app.doc().line(1).ends_with("beta"),
+            "line1: {}",
+            app.doc().line(1)
+        );
         // One undo removes the pasted text.
         app.on_key(ctrl(KeyCode::Char('z')));
         assert_eq!(app.doc().line(1), "gamma delta");
@@ -5483,7 +5550,11 @@ mod tests {
         // with identical text the visible result is unchanged, which pins
         // the grouping (an ungrouped first undo would show "gamma ").
         app.on_key(ctrl(KeyCode::Char('z')));
-        assert_eq!(app.doc().line(1), "gamma delta", "replace-paste undoes as one step");
+        assert_eq!(
+            app.doc().line(1),
+            "gamma delta",
+            "replace-paste undoes as one step"
+        );
         // Shift+Delete with no selection cuts the current line.
         app.on_key(plain(KeyCode::Home));
         app.on_key(shift(KeyCode::Delete));
