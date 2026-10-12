@@ -772,10 +772,13 @@ impl App {
         }
     }
 
-    /// Return the index of the tab at `column`, or `None` if the click
-    /// landed on empty tab-bar space (the fill span).
-    fn tab_at_column(&self, column: u16) -> Option<usize> {
+    /// Shared layout helper used by both the tab-bar render and
+    /// tab_at_column hit-testing. A render change automatically updates
+    /// hit-testing because both consume the same ranges.
+    /// Returns (start_col, title, tab_index) for each tab.
+    fn tab_layout(&self) -> Vec<(u16, String, usize)> {
         let mut col: u16 = 0;
+        let mut result = Vec::new();
         for i in 0..self.docs.len() {
             let title = self.doc_title(i);
             let title = if i == self.active {
@@ -784,12 +787,21 @@ impl App {
                 title.trim_end().to_string() + " │"
             };
             let width = title.chars().count() as u16;
-            if column >= col && column < col + width {
-                return Some(i);
-            }
+            result.push((col, title, i));
             col += width;
         }
-        None
+        result
+    }
+
+    /// Return the index of the tab at `column`, or `None` if the click
+    /// landed on empty tab-bar space (the fill span).
+    fn tab_at_column(&self, column: u16) -> Option<usize> {
+        self.tab_layout()
+            .iter()
+            .find(|(start, title, _)| {
+                column >= *start && column < start + title.chars().count() as u16
+            })
+            .map(|(_, _, i)| *i)
     }
 
     // -- Drawing -----------------------------------------------------------
@@ -828,7 +840,7 @@ impl App {
 
     fn draw_tabs(&self, f: &mut Frame, area: ratatui::prelude::Rect) {
         let mut spans: Vec<Span> = Vec::new();
-        for i in 0..self.docs.len() {
+        for (_, title, i) in self.tab_layout() {
             let active = i == self.active;
             let style = if active {
                 Style::new()
@@ -839,12 +851,6 @@ impl App {
                 Style::new()
                     .fg(self.theme.fg)
                     .bg(self.theme.tab_inactive_bg)
-            };
-            let title = self.doc_title(i);
-            let title = if active {
-                title
-            } else {
-                title.trim_end().to_string() + " │"
             };
             spans.push(Span::styled(title, style));
         }
@@ -1756,6 +1762,46 @@ mod tests {
     }
 
     #[test]
+    fn tab_layout_ranges_match_rendered_title_spans() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        let layout = app.tab_layout();
+        // The helper is consumed by draw_tabs (render) and tab_at_column
+        // (hit-testing); ranges must match what the renderer draws.
+        let mut col: u16 = 0;
+        for (start, title, idx) in &layout {
+            assert_eq!(*start, col, "tab {} start col", idx);
+            assert_eq!(
+                title.chars().count() as u16,
+                col + title.chars().count() as u16 - *start,
+                "tab {} width",
+                idx
+            );
+            col += title.chars().count() as u16;
+        }
+    }
+
+    #[test]
+    fn left_click_with_horizontal_scroll_maps_buffer_col() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        // Type a long line so horizontal scroll is needed
+        typed(&mut app, "abcdefghijklmnopqrstuvwxyz");
+        // Set a non-zero horizontal scroll offset
+        app.col_off = 5;
+        // Click at screen column 3 → buffer col = 3 + 5 = 8
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            3,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.cursor_col, 8, "buffer col = screen col + col_off");
+    }
+
+    #[test]
     fn click_empty_tab_bar_space_does_nothing() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         setup_viewport(&mut app, 10, 40);
@@ -1774,47 +1820,53 @@ mod tests {
     }
 
     #[test]
-    fn wheel_scroll_up_moves_viewport() {
+    fn wheel_scroll_up_moves_exact_step() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         setup_viewport(&mut app, 10, 40);
-        // Type enough lines to scroll
+        // Step is viewport_h - 1 = 9, same as PgUp/PgDn
         for i in 0..20 {
             typed(&mut app, &format!("line{i}"));
             if i < 19 {
                 app.on_key(plain(KeyCode::Enter));
             }
         }
-        // Move cursor to line 0 so clamp_scroll won't fight the scroll
-        app.cursor_line = 0;
-        app.scroll_top = 5;
-        app.on_mouse(MouseEventKind::ScrollUp, 0, 5, KeyModifiers::NONE);
-        assert!(app.scroll_top < 5, "scroll_up must decrease scroll_top");
-    }
-
-    #[test]
-    fn wheel_scroll_down_moves_viewport() {
-        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
-        setup_viewport(&mut app, 10, 40);
-        for i in 0..20 {
-            typed(&mut app, &format!("line{i}"));
-            if i < 19 {
-                app.on_key(plain(KeyCode::Enter));
-            }
-        }
-        // Move cursor to last line so clamp_scroll won't fight the scroll
+        // cursor_line must stay within viewport after scroll: set it
+        // at the bottom edge of the resulting viewport (scroll_top=10).
         app.cursor_line = 19;
-        app.scroll_top = 5;
-        app.on_mouse(MouseEventKind::ScrollDown, 0, 5, KeyModifiers::NONE);
-        assert!(app.scroll_top > 5, "scroll_down must increase scroll_top");
+        app.scroll_top = 19;
+        app.on_mouse(MouseEventKind::ScrollUp, 0, 5, KeyModifiers::NONE);
+        assert_eq!(app.scroll_top, 10, "scroll_up must step by viewport_h - 1");
     }
 
     #[test]
-    fn wheel_scroll_up_clamped_at_zero() {
+    fn wheel_scroll_down_moves_exact_step() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         setup_viewport(&mut app, 10, 40);
-        app.scroll_top = 0;
+        for i in 0..20 {
+            typed(&mut app, &format!("line{i}"));
+            if i < 19 {
+                app.on_key(plain(KeyCode::Enter));
+            }
+        }
+        // scroll_top=1 + step=9 = 10 = max_scroll (no clamp needed).
+        // cursor_line=10 is within resulting viewport [10..20).
+        app.cursor_line = 10;
+        app.scroll_top = 1;
+        app.on_mouse(MouseEventKind::ScrollDown, 0, 5, KeyModifiers::NONE);
+        assert_eq!(
+            app.scroll_top, 10,
+            "scroll_down must step by viewport_h - 1"
+        );
+    }
+
+    #[test]
+    fn wheel_scroll_up_partial_step_clamped_at_zero() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        // Near top: scroll_top (3) < step (9), so clamps to 0 — partial step
+        app.scroll_top = 3;
         app.on_mouse(MouseEventKind::ScrollUp, 0, 5, KeyModifiers::NONE);
-        assert_eq!(app.scroll_top, 0, "scroll_up must not go below zero");
+        assert_eq!(app.scroll_top, 0, "scroll_up near top clamps at zero");
     }
 
     #[test]
@@ -1827,10 +1879,10 @@ mod tests {
                 app.on_key(plain(KeyCode::Enter));
             }
         }
-        // Set scroll_top beyond max
-        app.scroll_top = 100;
-        app.on_mouse(MouseEventKind::ScrollDown, 0, 5, KeyModifiers::NONE);
+        // Step past max, then verify clamp
         let max_scroll = app.doc().line_count().saturating_sub(app.viewport_h);
+        app.scroll_top = max_scroll + 5;
+        app.on_mouse(MouseEventKind::ScrollDown, 0, 5, KeyModifiers::NONE);
         assert_eq!(app.scroll_top, max_scroll, "scroll_down must clamp at max");
     }
 

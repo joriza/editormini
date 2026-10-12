@@ -5,7 +5,8 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 ## Estado actual
 
 - **Hito 1**: 6 de 11 tareas completadas (1, 2, 4, 5, 7 y 9; la 3 —deshacer— se reordenó después de la 5 a pedido del dueño para tener algo probable antes).
-- **Verificación**: 91/91 tests, build con 0 warnings.
+- **Verificación**: 93/93 tests, build con 0 warnings.
+- **Ronda de hardening (task 9 mouse)**: refactor de `tab_layout` helper compartido entre render y hit-testing, test de `col_off` no nulo, y tests de rueda de scroll con distancia exacta.
 - **Verificado por el dueño**: escritura correcta, guardado, prompt de salida, `●` de modificado en pestañas.
 
 ## Cronología
