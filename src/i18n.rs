@@ -120,6 +120,8 @@ pub enum Key {
     MatchCounterCross,
     /// Status suffix for skipped read-only docs in cross-doc replace-all.
     SkippedReadOnly,
+    /// Clipboard operation failed.
+    ClipboardError,
 }
 
 /// Translate `key` for `lang`.
@@ -243,6 +245,9 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         // Status suffix for read-only docs skipped in cross-doc replace-all.
         (Lang::En, Key::SkippedReadOnly) => "read-only doc(s) skipped",
         (Lang::Es, Key::SkippedReadOnly) => "documento(s) solo lectura omitido(s)",
+        // Clipboard operation failure.
+        (Lang::En, Key::ClipboardError) => "Clipboard error",
+        (Lang::Es, Key::ClipboardError) => "Error de portapapeles",
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg
@@ -312,6 +317,7 @@ mod tests {
         Key::ReplaceConfirmMessageCross,
         Key::MatchCounterCross,
         Key::SkippedReadOnly,
+        Key::ClipboardError,
     ];
 
     #[test]

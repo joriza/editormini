@@ -374,6 +374,148 @@ impl App {
         result
     }
 
+    // -- Clipboard helpers ---------------------------------------------
+
+    /// Materialize the normalized selection as a String using char-based
+    /// slicing per line (first line from start_col to line end, middle
+    /// lines whole, last line 0..end_col, joined with "\n").
+    fn build_selection_text(
+        &self,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) -> String {
+        let doc = self.doc();
+        if start_line == end_line {
+            let line = doc.line(start_line);
+            line.chars()
+                .skip(start_col)
+                .take(end_col - start_col)
+                .collect()
+        } else {
+            let mut parts = Vec::new();
+            parts.push(doc.line(start_line).chars().skip(start_col).collect());
+            for i in (start_line + 1)..end_line {
+                parts.push(doc.line(i).to_string());
+            }
+            parts.push(doc.line(end_line).chars().take(end_col).collect());
+            parts.join("\n")
+        }
+    }
+
+    /// Copy text to the system clipboard. On failure, sets status to the
+    /// i18n ClipboardError key instead of panicking.
+    fn copy_to_clipboard(&mut self, text: &str) {
+        if arboard::Clipboard::new()
+            .and_then(|mut clip| clip.set_text(text))
+            .is_err()
+        {
+            self.status = i18n::t(self.lang, Key::ClipboardError).to_string();
+        }
+    }
+
+    /// Copy the current selection (or current line without trailing
+    /// newline when no selection is active) to the system clipboard.
+    /// VS Code includes the trailing newline when copying a line without
+    /// selection; this editor does not (documented deviation).
+    fn copy_selection_or_line(&mut self) {
+        let text = if let Some(((sl, sc), (el, ec))) = self.normalized_selection() {
+            self.build_selection_text(sl, sc, el, ec)
+        } else {
+            // No selection: copy the current line without its trailing
+            // newline.  VS Code includes it; this is a deliberate deviation.
+            self.doc().line(self.cursor_line).to_string()
+        };
+        self.copy_to_clipboard(&text);
+    }
+
+    /// Cut the current selection (or current line when no selection) to
+    /// the clipboard and delete it from the document.  Both the copy
+    /// and the delete form ONE undo step.
+    fn cut_selection_or_line(&mut self) {
+        let text = if let Some(((sl, sc), (el, ec))) = self.normalized_selection() {
+            self.build_selection_text(sl, sc, el, ec)
+        } else {
+            // No selection: copy the current line without its trailing
+            // newline (same deviation as copy).  The delete below removes
+            // the whole line including its line break.
+            self.doc().line(self.cursor_line).to_string()
+        };
+        self.copy_to_clipboard(&text);
+        self.perform_cut();
+    }
+
+    /// Execute the delete portion of a cut operation.  A non-empty selection
+    /// is deleted as-is; otherwise the whole line (including its line break)
+    /// is removed.  A collapsed selection counts as no selection (VS Code
+    /// treats Ctrl+X with an empty selection as cut-line).
+    fn perform_cut(&mut self) {
+        let record = if let Some(((sl, sc), (el, ec))) =
+            self.normalized_selection().filter(|((sl, sc), (el, ec))| sl != el || sc != ec)
+        {
+            self.doc_mut().delete_range(sl, sc, el, ec)
+        } else {
+            let line = self.cursor_line;
+            let line_len = self.doc().line_len(line);
+            if line + 1 < self.doc().line_count() {
+                // Delete the line including its line break by joining with
+                // the next line.
+                self.doc_mut().delete_range(line, 0, line + 1, 0)
+            } else {
+                // Last line: just clear its content.
+                self.doc_mut().delete_range(line, 0, line, line_len)
+            }
+        };
+        match record {
+            Ok(r) => {
+                self.record_edits(vec![r], false);
+                self.clear_selection();
+                self.clamp_cursor();
+            }
+            Err(e) => self.status = i18n::error_message(self.lang, &e),
+        }
+    }
+
+    /// Paste clipboard text at the cursor.  Normalizes "\r\n" and "\r"
+    /// to "\n" before inserting.  If a selection is active it is deleted
+    /// first; the delete+insert records form ONE undo step.  Cursor
+    /// lands at the end of the pasted text.
+    fn paste_from_clipboard(&mut self) {
+        let clipboard_text = match arboard::Clipboard::new().and_then(|mut clip| clip.get_text()) {
+            Ok(text) => text,
+            Err(_) => {
+                self.status = i18n::t(self.lang, Key::ClipboardError).to_string();
+                return;
+            }
+        };
+        // Normalize CRLF and lone CR to LF before inserting.
+        let normalized = clipboard_text.replace("\r\n", "\n").replace('\r', "\n");
+        let mut records = Vec::new();
+        // If a selection is active, delete it first.
+        if let Some(((sl, sc), (el, ec))) = self.normalized_selection() {
+            match self.doc_mut().delete_range(sl, sc, el, ec) {
+                Ok(record) => {
+                    records.push(record);
+                    self.cursor_line = sl;
+                    self.cursor_col = sc;
+                    self.clear_selection();
+                }
+                Err(e) => {
+                    self.status = i18n::error_message(self.lang, &e);
+                    return;
+                }
+            }
+        }
+        if let Some(record) = self.do_insert(&normalized) {
+            records.push(record);
+        }
+        if !records.is_empty() {
+            self.record_edits(records, false);
+        }
+        self.clamp_cursor();
+    }
+
     // -- Word movement helpers -------------------------------------------
 
     fn is_word_char(c: char) -> bool {
@@ -963,6 +1105,11 @@ impl App {
             (KeyCode::Char('2'), true, _) => self.last_doc_of_panel(2),
             (KeyCode::PageDown, true, _) => self.next_doc(1),
             (KeyCode::PageUp, true, _) => self.next_doc(-1),
+            // Ctrl+Insert → copy (Windows-classic fallback)
+            (KeyCode::Insert, true, _) => self.copy_selection_or_line(),
+            // Shift+Insert → paste (Windows-classic fallback)
+            (KeyCode::Insert, _, true) => self.paste_from_clipboard(),
+            // Plain Insert → toggle overwrite mode
             (KeyCode::Insert, _, _) => {
                 self.overwrite = !self.overwrite;
                 let key = if self.overwrite {
@@ -972,6 +1119,13 @@ impl App {
                 };
                 self.status = i18n::t(self.lang, key).to_string();
             }
+            // Ctrl+C / Ctrl+Insert → copy
+            (KeyCode::Char('c' | 'C'), true, _) => self.copy_selection_or_line(),
+            // Ctrl+X / Shift+Delete → cut
+            (KeyCode::Char('x' | 'X'), true, _) => self.cut_selection_or_line(),
+            (KeyCode::Delete, _, true) => self.cut_selection_or_line(),
+            // Ctrl+V / Shift+Insert → paste
+            (KeyCode::Char('v' | 'V'), true, _) => self.paste_from_clipboard(),
             (KeyCode::Char(c), false, _) => {
                 self.clear_selection();
                 self.type_char(c);
@@ -984,6 +1138,7 @@ impl App {
                 self.clear_selection();
                 self.backspace();
             }
+            // Plain Delete → delete forward
             (KeyCode::Delete, _, _) => {
                 self.clear_selection();
                 self.delete_forward();
@@ -5047,5 +5202,71 @@ mod tests {
         assert_eq!(app.cursor_col, 5);
     }
 
+    // ============ T4: clipboard ============
 
+    #[test]
+    fn build_selection_text_slices_by_chars_multiline() {
+        // Char-based slicing: multi-byte chars and multi-line joins.
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "héllo\nwörld\n");
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(shift(KeyCode::Down));
+        app.on_key(shift(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        // Selection (0,0)-(1,3) = "héllo\nwör".
+        assert_eq!(app.build_selection_text(0, 0, 1, 3), "héllo\nwör");
+    }
+
+    #[test]
+    fn clipboard_copy_paste_cut_roundtrip() {
+        // The ONLY clipboard-touching test: cargo runs tests in parallel and
+        // they would race on the real system clipboard, so every clipboard
+        // interaction lives here.
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "alpha beta\ngamma delta");
+        // Select "beta" on line 0 (typed leaves the cursor at doc end).
+        app.on_key(plain(KeyCode::Up));
+        app.on_key(plain(KeyCode::Home));
+        for _ in 0..6 {
+            app.on_key(plain(KeyCode::Right));
+        }
+        for _ in 0..4 {
+            app.on_key(shift(KeyCode::Right));
+        }
+        assert_eq!(app.normalized_selection(), Some(((0, 6), (0, 10))));
+        // Copy it, jump to doc end, paste: line 1 gains "beta".
+        app.on_key(ctrl(KeyCode::Char('c')));
+        app.on_key(ctrl(KeyCode::End));
+        app.on_key(ctrl(KeyCode::Char('v')));
+        assert!(app.doc().line(1).ends_with("beta"), "line1: {}", app.doc().line(1));
+        // One undo removes the pasted text.
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(1), "gamma delta");
+        // Select "delta" and cut it (Ctrl+X).
+        for _ in 0..5 {
+            app.on_key(shift(KeyCode::Left));
+        }
+        assert_eq!(app.normalized_selection(), Some(((1, 6), (1, 11))));
+        app.on_key(ctrl(KeyCode::Char('x')));
+        assert_eq!(app.doc().line(1), "gamma ");
+        // Shift+Insert pastes it back at the cursor.
+        app.on_key(shift(KeyCode::Insert));
+        assert_eq!(app.doc().line(1), "gamma delta");
+        // Paste over an active selection deletes+inserts as ONE undo step.
+        for _ in 0..5 {
+            app.on_key(shift(KeyCode::Left));
+        }
+        app.on_key(ctrl(KeyCode::Char('v')));
+        assert_eq!(app.doc().line(1), "gamma delta");
+        // ONE undo restores the pre-paste state (grouped delete+insert):
+        // with identical text the visible result is unchanged, which pins
+        // the grouping (an ungrouped first undo would show "gamma ").
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(1), "gamma delta", "replace-paste undoes as one step");
+        // Shift+Delete with no selection cuts the current line.
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(shift(KeyCode::Delete));
+        assert_eq!(app.doc().line(1), "", "last-line cut clears the line");
+    }
 }
