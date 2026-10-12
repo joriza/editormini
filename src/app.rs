@@ -1738,13 +1738,18 @@ impl App {
             let line = Line::from(vec![
                 Span::styled(
                     dialog_text,
-                    Style::default().fg(self.theme.fg).bg(self.theme.prompt_bg),
+                    // Dark prompt fg on the amber bar: the editor's light
+                    // gray fg was unreadable there (owner feedback).
+                    Style::default()
+                        .fg(self.theme.prompt_fg)
+                        .bg(self.theme.prompt_bg),
                 ),
                 Span::styled(
                     format!("  {hints}"),
                     Style::default()
-                        .fg(self.theme.line_number_fg)
-                        .bg(self.theme.prompt_bg),
+                        .fg(self.theme.prompt_fg)
+                        .bg(self.theme.prompt_bg)
+                        .add_modifier(Modifier::DIM),
                 ),
             ]);
             Paragraph::new(line).style(
@@ -3499,6 +3504,29 @@ mod tests {
             right.contains(&marker),
             "status right side must contain version marker {marker:?}, got {right:?}"
         );
+    }
+
+    // Regression: dialog text used the editor's light-gray fg and the
+    // mid-gray hint fg on the amber prompt background — unreadable.
+    #[test]
+    fn search_dialog_text_is_dark_on_prompt_background() {
+        let dir = temp_dir("search_dialog_text_contrast");
+        let path = dir.join("search_text_contrast.txt");
+        std::fs::write(&path, "alpha beta\ngamma delta\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "delta");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        // Every cell on the dialog row must use the dark prompt fg — no
+        // light-gray text (0xD4D4D4) or mid-gray hints (0x858585) on amber.
+        for col in 0..80u16 {
+            let fg = terminal.backend().buffer().get(col, 1).style().fg;
+            assert_ne!(fg, Some(Color::Rgb(0xD4, 0xD4, 0xD4)), "col {col}");
+            assert_ne!(fg, Some(Color::Rgb(0x85, 0x85, 0x85)), "col {col}");
+        }
+        let _ = dir;
     }
 
     // R3-005: Ctrl+H opens the replace dialog.
