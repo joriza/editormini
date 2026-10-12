@@ -22,6 +22,10 @@ pub struct Theme {
     pub line_number_fg: Color,
     /// Brighter/emphasized color for the cursor line's line number.
     pub line_number_cursor_fg: Color,
+    /// Background for non-current search matches (softer highlight).
+    pub search_match_bg: Color,
+    /// Background for the current (active) search match (stronger highlight).
+    pub search_current_match_bg: Color,
 }
 
 /// VS Code Dark+ chrome palette (milestone default).
@@ -36,6 +40,8 @@ pub const DARK_PLUS: Theme = Theme {
     prompt_fg: Color::Black,
     line_number_fg: Color::Rgb(0x85, 0x85, 0x85),
     line_number_cursor_fg: Color::Rgb(0xD4, 0xD4, 0xD4),
+    search_match_bg: Color::Rgb(0x61, 0x32, 0x14),
+    search_current_match_bg: Color::Rgb(0x9E, 0x6A, 0x03),
 };
 
 /// Light+ placeholder: proves the theme-switch path end to end; the real
@@ -51,6 +57,8 @@ pub const LIGHT_PLUS_STUB: Theme = Theme {
     prompt_fg: Color::Black,
     line_number_fg: Color::Rgb(0xAA, 0xAA, 0xAA),
     line_number_cursor_fg: Color::Rgb(0x33, 0x33, 0x33),
+    search_match_bg: Color::Rgb(0xFF, 0xE0, 0xB2),
+    search_current_match_bg: Color::Rgb(0xFF, 0xC1, 0x07),
 };
 
 impl Theme {

@@ -76,6 +76,20 @@ pub enum Key {
     OverwriteIndicator,
     /// Fallback language name for files with no recognized syntax.
     PlainText,
+    /// No matches result.
+    NoMatches,
+    /// Match counter template: "{current}/{total}".
+    MatchCounter,
+    /// Key hint: Enter to find next match.
+    FindNext,
+    /// Key hint: Shift+Enter to find previous match.
+    FindPrev,
+    /// Key hint: Esc to close the search dialog.
+    FindClose,
+    /// Search dialog title.
+    FindDialogTitle,
+    /// Search options placeholder (future case/regex toggles).
+    FindOptions,
 }
 
 /// Translate `key` for `lang`.
@@ -145,6 +159,22 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         // Fallback language name for files with no recognized syntax.
         (Lang::En, Key::PlainText) => "Plain text",
         (Lang::Es, Key::PlainText) => "Texto sin formato",
+        // Search dialog.
+        (Lang::En, Key::NoMatches) => "No matches",
+        (Lang::Es, Key::NoMatches) => "Sin coincidencias",
+        (Lang::En, Key::MatchCounter) => "{current}/{total}",
+        (Lang::Es, Key::MatchCounter) => "{current}/{total}",
+        (Lang::En, Key::FindNext) => "Enter: next",
+        (Lang::Es, Key::FindNext) => "Enter: siguiente",
+        (Lang::En, Key::FindPrev) => "Shift+Enter: prev",
+        (Lang::Es, Key::FindPrev) => "Shift+Enter: anterior",
+        (Lang::En, Key::FindClose) => "Esc: close",
+        (Lang::Es, Key::FindClose) => "Esc: cerrar",
+        // Search dialog title and options placeholder.
+        (Lang::En, Key::FindDialogTitle) => "Find",
+        (Lang::Es, Key::FindDialogTitle) => "Buscar",
+        (Lang::En, Key::FindOptions) => "options: case/regex",
+        (Lang::Es, Key::FindOptions) => "opciones: mayúsculas/regex",
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg

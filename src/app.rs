@@ -44,6 +44,48 @@ pub enum PromptKind {
     SaveAs,
 }
 
+/// Search options struct, present for future toggles (case-sensitive,
+/// regex) but no UI toggles yet in this task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SearchOptions {
+    pub case_sensitive: bool,
+    pub is_regex: bool,
+}
+
+/// Per-match position within a line (char offsets).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MatchPos {
+    line: usize,
+    start_col: usize,
+    end_col: usize,
+}
+
+/// State of the active search dialog.
+pub struct SearchState {
+    query: String,
+    matches: Vec<MatchPos>,
+    /// Index into `matches` of the current match, or `None` if no
+    /// navigation has happened yet (or no matches exist).
+    current_idx: Option<usize>,
+    pre_search_line: usize,
+    pre_search_col: usize,
+    /// True once the user has navigated to at least one match.
+    navigated: bool,
+}
+
+impl SearchState {
+    fn new(query: String, matches: Vec<MatchPos>) -> Self {
+        SearchState {
+            query,
+            matches,
+            current_idx: None,
+            pre_search_line: 0,
+            pre_search_col: 0,
+            navigated: false,
+        }
+    }
+}
+
 /// Cursor and scroll state saved per tab while another tab is focused.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DocView {
@@ -94,6 +136,10 @@ pub struct App {
     pub confirm: Option<ConfirmKind>,
     /// Pending text-input prompt: open file or save-as destination.
     pub prompt: Option<(PromptKind, String)>,
+    /// Pending search dialog state.
+    pub search: Option<SearchState>,
+    /// Search options struct (present for future toggles, no UI yet).
+    pub search_options: SearchOptions,
     /// Overwrite mode (Insert key). Off by default: VS Code-style insertion.
     pub overwrite: bool,
     /// Transient status message. Persists until the next edit action or the
@@ -123,6 +169,8 @@ impl App {
             quit: false,
             confirm: None,
             prompt: None,
+            search: None,
+            search_options: SearchOptions::default(),
             overwrite: false,
             status: i18n::t(lang, Key::StartupHints).to_string(),
             lang,
@@ -491,6 +539,10 @@ impl App {
     // -- Events ------------------------------------------------------------
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        if self.search.is_some() {
+            self.on_search_key(key);
+            return;
+        }
         if self.prompt.is_some() {
             self.on_prompt_key(key);
             return;
@@ -512,6 +564,7 @@ impl App {
             (KeyCode::F(3), _, _) => self.save_all(),
             // Ctrl+O → open file prompt
             (KeyCode::Char('o' | 'O'), true, _) => self.open_file_prompt(),
+            (KeyCode::Char('f' | 'F'), true, _) => self.open_search(),
             (KeyCode::Char('q'), true, _) => self.request_quit(),
             (KeyCode::Char('w'), true, _) => self.request_close(),
             (KeyCode::Char('z'), true, _) => self.undo(),
@@ -709,6 +762,220 @@ impl App {
         }
     }
 
+    /// Open the search dialog, saving the current cursor position
+    /// so it can be restored on Esc if no navigation happened.
+    fn open_search(&mut self) {
+        let pre_line = self.cursor_line;
+        let pre_col = self.cursor_col;
+        let mut search = SearchState::new(String::new(), vec![]);
+        search.pre_search_line = pre_line;
+        search.pre_search_col = pre_col;
+        self.search = Some(search);
+    }
+
+    /// Handle keys while the search dialog is open.
+    fn on_search_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        match (key.code, ctrl, shift) {
+            // Esc closes the dialog; restore cursor if no navigation.
+            (KeyCode::Esc, _, _) => {
+                let restore_cursor = self.search.as_ref().is_some_and(|s| !s.navigated);
+                if restore_cursor {
+                    let (pre_line, pre_col) = self
+                        .search
+                        .as_ref()
+                        .map(|s| (s.pre_search_line, s.pre_search_col))
+                        .unwrap();
+                    self.cursor_line = pre_line;
+                    self.cursor_col = pre_col;
+                }
+                self.search = None;
+                self.clamp_cursor();
+                self.clamp_scroll();
+            }
+            // Shift+Enter = previous match (wrap).
+            (KeyCode::Enter, _, true) => {
+                self.search_prev_match();
+            }
+            // Enter = next match (wrap).
+            (KeyCode::Enter, _, _) => {
+                self.search_next_match();
+            }
+            // Printable characters: append to query, reset to first match.
+            (KeyCode::Char(c), false, false)
+                if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if let Some(search) = &mut self.search {
+                    search.query.push(c);
+                }
+                self.search_reset_matches();
+            }
+            // Backspace: remove last char, reset matches.
+            (KeyCode::Backspace, _, _) => {
+                if let Some(search) = &mut self.search {
+                    search.query.pop();
+                }
+                self.search_reset_matches();
+            }
+            _ => {}
+        }
+    }
+
+    /// Recompute matches for the current query and reset to the
+    /// first match (or None if no matches / empty query).
+    fn search_reset_matches(&mut self) {
+        let query = self
+            .search
+            .as_ref()
+            .map(|s| s.query.clone())
+            .unwrap_or_default();
+        let matches = self.find_matches(&query);
+        let has_matches = !matches.is_empty();
+        let first_idx = has_matches.then_some(0);
+        if let Some(search) = &mut self.search {
+            search.matches = matches;
+            search.current_idx = first_idx;
+            search.navigated = false;
+        }
+        if has_matches {
+            self.goto_match(0);
+        }
+    }
+
+    /// Advance to the next match (wraps around).
+    fn search_next_match(&mut self) {
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        if search.matches.is_empty() {
+            return;
+        }
+        search.navigated = true;
+        let next = match search.current_idx {
+            Some(i) => (i + 1) % search.matches.len(),
+            None => 0,
+        };
+        search.current_idx = Some(next);
+        self.goto_match(next);
+    }
+
+    /// Go to the previous match (wraps around).
+    fn search_prev_match(&mut self) {
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        if search.matches.is_empty() {
+            return;
+        }
+        search.navigated = true;
+        let prev = match search.current_idx {
+            Some(i) => (i + search.matches.len() - 1) % search.matches.len(),
+            None => 0,
+        };
+        search.current_idx = Some(prev);
+        self.goto_match(prev);
+    }
+
+    /// Move cursor to the start of match `idx` and scroll into view.
+    fn goto_match(&mut self, idx: usize) {
+        let Some(search) = &self.search else {
+            return;
+        };
+        let m = search.matches[idx];
+        self.cursor_line = m.line;
+        self.cursor_col = m.start_col;
+        self.clamp_cursor();
+        self.clamp_scroll();
+    }
+
+    /// Find all single-line matches of `query` in the active document.
+    /// Returns char-offset positions; empty query returns no matches.
+    fn find_matches(&self, query: &str) -> Vec<MatchPos> {
+        if query.is_empty() {
+            return vec![];
+        }
+        let case_sensitive = self.search_options.case_sensitive;
+        let mut results = Vec::new();
+        for line_idx in 0..self.doc().line_count() {
+            let line = self.doc().line(line_idx);
+            if case_sensitive {
+                let mut start = 0;
+                while let Some(pos) = line[start..].find(query) {
+                    let byte_start = start + pos;
+                    let byte_end = byte_start + query.len();
+                    results.push(MatchPos {
+                        line: line_idx,
+                        start_col: line[..byte_start].chars().count(),
+                        end_col: line[..byte_end].chars().count(),
+                    });
+                    start = byte_end;
+                }
+            } else {
+                let line_lower = line.to_lowercase();
+                let query_lower = query.to_lowercase();
+                let mut start = 0;
+                while let Some(pos) = line_lower[start..].find(&query_lower) {
+                    let byte_start = start + pos;
+                    let byte_end = byte_start + query_lower.len();
+                    results.push(MatchPos {
+                        line: line_idx,
+                        start_col: line[..byte_start].chars().count(),
+                        end_col: line[..byte_end].chars().count(),
+                    });
+                    start = byte_end;
+                }
+            }
+        }
+        results
+    }
+
+    /// Compose styled spans for a line with search match highlights.
+    /// Used by the renderer and by tests directly.
+    fn compose_highlight_spans(
+        line_text: &str,
+        highlights: &[&MatchPos],
+        current_idx: usize,
+        search_match_bg: Color,
+        search_current_match_bg: Color,
+    ) -> Vec<Span<'static>> {
+        let char_to_byte = |s: &str, char_idx: usize| -> usize {
+            s.char_indices()
+                .nth(char_idx)
+                .map(|(byte_idx, _)| byte_idx)
+                .unwrap_or(s.len())
+        };
+        let mut spans = Vec::new();
+        let mut last_char = 0;
+        for (hi, m) in highlights.iter().enumerate() {
+            let match_start_byte = char_to_byte(line_text, m.start_col);
+            let match_end_byte = char_to_byte(line_text, m.end_col);
+            if m.start_col > last_char {
+                let pre_byte = char_to_byte(line_text, last_char);
+                let pre_text = &line_text[pre_byte..match_start_byte];
+                spans.push(Span::styled(pre_text.to_string(), Style::default()));
+            }
+            let is_current = hi == current_idx;
+            let bg = if is_current {
+                search_current_match_bg
+            } else {
+                search_match_bg
+            };
+            let match_text = &line_text[match_start_byte..match_end_byte];
+            spans.push(Span::styled(
+                match_text.to_string(),
+                Style::default().bg(bg),
+            ));
+            last_char = m.end_col;
+        }
+        if last_char < line_text.chars().count() {
+            let rest_byte = char_to_byte(line_text, last_char);
+            let rest = &line_text[rest_byte..];
+            spans.push(Span::styled(rest.to_string(), Style::default()));
+        }
+        spans
+    }
+
     pub fn handle_event(&mut self, event: Event) {
         match event {
             Event::Key(key) => {
@@ -878,10 +1145,77 @@ impl App {
         let first = self.scroll_top;
         let last = (self.scroll_top + self.viewport_h).min(self.doc().line_count());
         let gutter_w = self.gutter_width();
+
+        // Draw the search dialog bar at the top of the editor when open.
+        if let Some(search) = &self.search {
+            let query = &search.query;
+            let counter = if search.matches.is_empty() {
+                i18n::t(self.lang, Key::NoMatches).to_string()
+            } else {
+                let current = search.current_idx.map_or(0, |i| i + 1);
+                i18n::tr(
+                    self.lang,
+                    Key::MatchCounter,
+                    &[
+                        ("current", &current.to_string()),
+                        ("total", &search.matches.len().to_string()),
+                    ],
+                )
+            };
+            let hints = format!(
+                "{}  {}  {}  {}",
+                i18n::t(self.lang, Key::FindNext),
+                i18n::t(self.lang, Key::FindPrev),
+                i18n::t(self.lang, Key::FindClose),
+                i18n::t(self.lang, Key::FindOptions),
+            );
+            let dialog_text = format!(
+                "{}  {}  {}",
+                i18n::t(self.lang, Key::FindDialogTitle),
+                query,
+                counter
+            );
+            let line = Line::from(vec![
+                Span::styled(
+                    dialog_text,
+                    Style::default().fg(self.theme.fg).bg(self.theme.prompt_bg),
+                ),
+                Span::styled(
+                    format!("  {hints}"),
+                    Style::default()
+                        .fg(self.theme.line_number_fg)
+                        .bg(self.theme.prompt_bg),
+                ),
+            ]);
+            let widget = Paragraph::new(line).style(
+                Style::default()
+                    .fg(self.theme.prompt_fg)
+                    .bg(self.theme.prompt_bg),
+            );
+            f.render_widget(widget, area);
+        }
+
         let extension = highlight::extension_of(self.doc().path());
         let lines: Vec<&str> = (first..last).map(|i| self.doc().line(i)).collect();
         let styled =
             highlight::styled_lines(&lines, extension.as_deref(), self.theme.fg, self.theme.bg);
+
+        // Build a map of line_idx → Vec<MatchPos> for visible lines,
+        // so we can highlight matches when the search dialog is open.
+        let match_highlights: std::collections::HashMap<usize, Vec<&MatchPos>> = self
+            .search
+            .as_ref()
+            .map(|search| {
+                let mut map: std::collections::HashMap<usize, Vec<&MatchPos>> =
+                    std::collections::HashMap::new();
+                for m in &search.matches {
+                    if m.line >= first && m.line < last {
+                        map.entry(m.line).or_default().push(m);
+                    }
+                }
+                map
+            })
+            .unwrap_or_default();
 
         // Prepend a right-aligned line-number span (+ trailing space) to each
         // visible line. Rows past EOF receive a blank gutter.
@@ -890,6 +1224,7 @@ impl App {
             .enumerate()
             .map(|(i, mut line)| {
                 let line_num = first + i + 1; // 1-based
+                let buf_line = line_num - 1;
                 let is_cursor_line = line_num - 1 == self.cursor_line;
                 let num_style = Style::new()
                     .fg(if is_cursor_line {
@@ -904,7 +1239,26 @@ impl App {
                 );
                 let space_span = Span::styled(" ", num_style);
                 let mut spans = vec![num_span, space_span];
-                spans.extend(line.spans);
+
+                // Add search match highlights on top of syntax spans.
+                if let Some(highlights) = match_highlights.get(&buf_line) {
+                    let line_text = self.doc().line(buf_line);
+                    let current_idx = self
+                        .search
+                        .as_ref()
+                        .and_then(|s| s.current_idx)
+                        .unwrap_or(0);
+                    spans.extend(App::compose_highlight_spans(
+                        line_text,
+                        highlights,
+                        current_idx,
+                        self.theme.search_match_bg,
+                        self.theme.search_current_match_bg,
+                    ));
+                } else {
+                    spans.extend(line.spans);
+                }
+
                 line.spans = spans;
                 line
             })
@@ -1052,6 +1406,10 @@ mod tests {
 
     fn ctrl(code: KeyCode) -> KeyEvent {
         press(code, KeyModifiers::CONTROL)
+    }
+
+    fn shift(code: KeyCode) -> KeyEvent {
+        press(code, KeyModifiers::SHIFT)
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -1849,7 +2207,7 @@ mod tests {
 
     #[test]
     fn tab_layout_ranges_match_rendered_title_spans() {
-        let mut app = App::new(
+        let app = App::new(
             vec![Document::new_untitled(), Document::new_untitled()],
             Lang::En,
         );
@@ -2326,5 +2684,192 @@ mod tests {
         app.status.clear();
         let (_, right) = app.status_line(80);
         assert!(right.contains("Texto sin formato"), "right: {right}");
+    }
+
+    // -- Search dialog tests -------------------------------------------
+
+    #[test]
+    fn ctrl_f_opens_search_dialog() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        assert!(app.search.is_none());
+        app.on_key(ctrl(KeyCode::Char('f')));
+        assert!(app.search.is_some());
+        assert_eq!(app.search.as_ref().unwrap().query, "");
+        assert_eq!(app.search.as_ref().unwrap().matches.len(), 0);
+    }
+
+    #[test]
+    fn typing_updates_search_query() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "rust");
+        assert_eq!(app.search.as_ref().unwrap().query, "rust");
+    }
+
+    #[test]
+    fn counter_shows_match_count() {
+        let dir = temp_dir("search_match");
+        let path = dir.join("search.txt");
+        std::fs::write(&path, "rust is great\nrust is fast\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "rust");
+        let search = app.search.as_ref().unwrap();
+        assert_eq!(search.matches.len(), 2);
+        assert!(search.current_idx.is_some());
+        assert_eq!(search.current_idx, Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn counter_shows_no_matches() {
+        let dir = temp_dir("search_nomatch");
+        let path = dir.join("search.txt");
+        std::fs::write(&path, "hello world\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "xyz");
+        let search = app.search.as_ref().unwrap();
+        assert!(search.matches.is_empty());
+        assert!(search.current_idx.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enter_navigates_next_match_with_wrap() {
+        let dir = temp_dir("search_next");
+        let path = dir.join("search.txt");
+        std::fs::write(&path, "rust is great\nrust is fast\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "rust");
+        // After typing, search_reset_matches positions at match 0.
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(0));
+        // First Enter advances to match 1.
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(1));
+        let line_after_second = app.cursor_line;
+        // Second Enter wraps around to match 0.
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(0));
+        assert_ne!(app.cursor_line, line_after_second);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shift_enter_navigates_prev_match() {
+        let dir = temp_dir("search_prev");
+        let path = dir.join("search.txt");
+        std::fs::write(&path, "rust is great\nrust is fast\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "rust");
+        // After typing, positioned at match 0.
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(0));
+        // Advance to match 1.
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(1));
+        // Shift+Enter goes back to match 0.
+        app.on_key(shift(KeyCode::Enter));
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn esc_restores_cursor_when_no_navigation() {
+        let dir = temp_dir("search_esc_noop");
+        let path = dir.join("search.txt");
+        std::fs::write(&path, "rust is great\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.on_key(ctrl(KeyCode::Char('f')));
+        // No navigation yet; Esc should restore cursor.
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.search.is_none());
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn esc_keeps_match_position_after_navigation() {
+        let dir = temp_dir("search_esc_keep");
+        let path = dir.join("search.txt");
+        std::fs::write(&path, "rust is great\nrust is fast\n").expect("pre-create");
+        let app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        let mut app = app;
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "rust");
+        // Navigate to a match first.
+        app.on_key(plain(KeyCode::Enter));
+        assert!(app.search.as_ref().unwrap().navigated);
+        let line_after_nav = app.cursor_line;
+        // Esc should keep the cursor at the match position.
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.search.is_none());
+        assert_eq!(app.cursor_line, line_after_nav);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn highlight_spans_present_on_visible_line() {
+        // Test compose_highlight_spans directly (pure helper, no rendering needed).
+        let line_text = "hello rust world";
+        let matches = vec![MatchPos {
+            line: 0,
+            start_col: 6,
+            end_col: 10,
+        }];
+        let spans = App::compose_highlight_spans(
+            line_text,
+            &[],
+            0,
+            Color::Rgb(0x61, 0x32, 0x14),
+            Color::Rgb(0x9E, 0x6A, 0x03),
+        );
+        // No highlights when highlights slice is empty.
+        assert!(spans.len() >= 1);
+        // Now with a highlight.
+        let highlights = vec![&matches[0]];
+        let spans = App::compose_highlight_spans(
+            line_text,
+            &highlights,
+            0,
+            Color::Rgb(0x61, 0x32, 0x14),
+            Color::Rgb(0x9E, 0x6A, 0x03),
+        );
+        // Should have at least 3 spans: before, match, after.
+        assert!(spans.len() >= 3);
+    }
+
+    #[test]
+    fn empty_query_no_op() {
+        let dir = temp_dir("search_empty");
+        let path = dir.join("search.txt");
+        std::fs::write(&path, "rust is great\naxe stands out\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        // Empty query should produce no matches.
+        assert!(app.search.as_ref().unwrap().matches.is_empty());
+        // Typing then backspace to empty should keep no matches.
+        typed(&mut app, "x");
+        assert!(!app.search.as_ref().unwrap().matches.is_empty());
+        app.on_key(plain(KeyCode::Backspace));
+        assert!(app.search.as_ref().unwrap().matches.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn case_insensitive_default() {
+        let dir = temp_dir("search_case");
+        let path = dir.join("search.txt");
+        std::fs::write(&path, "rust is great\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        // Uppercase query should find lowercase content by default.
+        typed(&mut app, "RUST");
+        assert_eq!(app.search.as_ref().unwrap().matches.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
