@@ -29,7 +29,5 @@ fn main() {
     let rem = secs.rem_euclid(86_400) as u32;
     let (_, month, day) = civil_from_days(days);
     let (hour, minute) = (rem / 3600, (rem % 3600) / 60);
-    println!(
-        "cargo:rustc-env=EDITORMINI_BUILD_ID={month:02}{day:02}-{hour:02}{minute:02}"
-    );
+    println!("cargo:rustc-env=EDITORMINI_BUILD_ID={month:02}{day:02}-{hour:02}{minute:02}");
 }
