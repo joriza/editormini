@@ -251,8 +251,12 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Key::ClipboardError) => "Clipboard error",
         (Lang::Es, Key::ClipboardError) => "Error de portapapeles",
         // Interactive open-file list hint (title of the bordered popup).
-        (Lang::En, Key::OpenListHints) => "\u{2191}\u{2193} pick · Enter open · Esc cancel · type to filter",
-        (Lang::Es, Key::OpenListHints) => "\u{2191}\u{2193} elegir · Enter abrir · Esc cancelar · tipeá para filtrar",
+        (Lang::En, Key::OpenListHints) => {
+            "\u{2191}\u{2193} pick · Enter open · Esc cancel · type to filter"
+        }
+        (Lang::Es, Key::OpenListHints) => {
+            "\u{2191}\u{2193} elegir · Enter abrir · Esc cancelar · tipeá para filtrar"
+        }
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg
