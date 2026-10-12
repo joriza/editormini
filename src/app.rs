@@ -635,7 +635,9 @@ impl App {
                     .bg(self.theme.tab_active_bg)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::new().fg(self.theme.fg).bg(self.theme.tab_inactive_bg)
+                Style::new()
+                    .fg(self.theme.fg)
+                    .bg(self.theme.tab_inactive_bg)
             };
             let title = self.doc_title(i);
             let title = if active {
@@ -658,12 +660,8 @@ impl App {
         let last = (self.scroll_top + self.viewport_h).min(self.doc().line_count());
         let lines: Vec<&str> = (first..last).map(|i| self.doc().line(i)).collect();
         let extension = highlight::extension_of(self.doc().path());
-        let styled = highlight::styled_lines(
-            &lines,
-            extension.as_deref(),
-            self.theme.fg,
-            self.theme.bg,
-        );
+        let styled =
+            highlight::styled_lines(&lines, extension.as_deref(), self.theme.fg, self.theme.bg);
         let widget = Paragraph::new(styled);
         f.render_widget(widget, area);
 
@@ -675,8 +673,11 @@ impl App {
     fn draw_status(&mut self, f: &mut Frame, area: ratatui::prelude::Rect) {
         if self.confirm.is_some() {
             let prompt = i18n::t(self.lang, Key::SaveChangesPrompt);
-            let widget =
-                Paragraph::new(prompt).style(Style::new().fg(self.theme.prompt_fg).bg(self.theme.prompt_bg));
+            let widget = Paragraph::new(prompt).style(
+                Style::new()
+                    .fg(self.theme.prompt_fg)
+                    .bg(self.theme.prompt_bg),
+            );
             f.render_widget(widget, area);
             return;
         }
@@ -701,7 +702,8 @@ impl App {
             Span::styled(format!("{left}{}", " ".repeat(pad)), Style::default()),
             Span::styled(right, Style::new().add_modifier(Modifier::BOLD)),
         ]);
-        let widget = Paragraph::new(line).style(Style::new().fg(Color::White).bg(self.theme.accent));
+        let widget =
+            Paragraph::new(line).style(Style::new().fg(Color::White).bg(self.theme.accent));
         f.render_widget(widget, area);
     }
 

@@ -40,11 +40,7 @@ fn build_dark_plus_tokens() -> SyntectTheme {
     fn rgb(r: u8, g: u8, b: u8) -> SyntectColor {
         SyntectColor { r, g, b, a: 0xFF }
     }
-    fn item(
-        selector: &str,
-        color: SyntectColor,
-        italic: bool,
-    ) -> Option<ThemeItem> {
+    fn item(selector: &str, color: SyntectColor, italic: bool) -> Option<ThemeItem> {
         Some(ThemeItem {
             scope: ScopeSelectors::from_str(selector).ok()?,
             style: StyleModifier {
@@ -98,28 +94,18 @@ fn syntax_for_extension(ext: &str) -> Option<&'static SyntaxReference> {
     /// Extensions absent from syntect's default set map to their closest
     /// structural cousin until the external-grammar loader (docs/plan.md)
     /// lands. `ps1` has no close cousin and stays plain for now.
-    const FALLBACKS: &[(&str, &str)] = &[
-        ("toml", "yml"),
-        ("ts", "js"),
-        ("tsx", "js"),
-        ("jsx", "js"),
-    ];
-    syntax_set()
-        .find_syntax_by_extension(ext)
-        .or_else(|| {
-            FALLBACKS
-                .iter()
-                .find(|(missing, _)| *missing == ext)
-                .and_then(|(_, fallback)| syntax_set().find_syntax_by_extension(fallback))
-        })
+    const FALLBACKS: &[(&str, &str)] =
+        &[("toml", "yml"), ("ts", "js"), ("tsx", "js"), ("jsx", "js")];
+    syntax_set().find_syntax_by_extension(ext).or_else(|| {
+        FALLBACKS
+            .iter()
+            .find(|(missing, _)| *missing == ext)
+            .and_then(|(_, fallback)| syntax_set().find_syntax_by_extension(fallback))
+    })
 }
 
 fn to_ratatui_style(style: syntect::highlighting::Style, bg: Color) -> Style {
-    let fg = Color::Rgb(
-        style.foreground.r,
-        style.foreground.g,
-        style.foreground.b,
-    );
+    let fg = Color::Rgb(style.foreground.r, style.foreground.g, style.foreground.b);
     let mut out = Style::new().fg(fg).bg(bg);
     if style.font_style.contains(FontStyle::ITALIC) {
         out = out.add_modifier(Modifier::ITALIC);
@@ -158,10 +144,7 @@ pub fn styled_lines(
                         if text.is_empty() {
                             return None;
                         }
-                        Some(Span::styled(
-                            text.to_string(),
-                            to_ratatui_style(*style, bg),
-                        ))
+                        Some(Span::styled(text.to_string(), to_ratatui_style(*style, bg)))
                     })
                     .collect(),
                 Err(_) => vec![Span::styled((*line).to_string(), plain)],
@@ -178,8 +161,10 @@ mod tests {
     #[test]
     fn curated_extensions_resolve_to_syntaxes() {
         for ext in ["rs", "md", "json", "go", "py", "toml", "html", "ts", "jsx"] {
-            assert!(syntax_for_extension(ext).is_some(),
-                "extension {ext} must resolve to a grammar (direct or fallback)");
+            assert!(
+                syntax_for_extension(ext).is_some(),
+                "extension {ext} must resolve to a grammar (direct or fallback)"
+            );
         }
     }
 
@@ -218,11 +203,18 @@ mod tests {
     #[test]
     fn rust_line_produces_styled_spans() {
         let lines = ["fn main() {}"];
-        let out = styled_lines(&lines, Some("rs"), Color::Rgb(0xD4, 0xD4, 0xD4), Color::Black);
+        let out = styled_lines(
+            &lines,
+            Some("rs"),
+            Color::Rgb(0xD4, 0xD4, 0xD4),
+            Color::Black,
+        );
         assert_eq!(out.len(), 1);
         assert!(
             out[0].spans.iter().any(|span| {
-                span.style.fg.is_some_and(|c| c != Color::Rgb(0xD4, 0xD4, 0xD4))
+                span.style
+                    .fg
+                    .is_some_and(|c| c != Color::Rgb(0xD4, 0xD4, 0xD4))
             }),
             "at least one token (e.g. keyword fn) must differ from base fg"
         );
@@ -231,21 +223,35 @@ mod tests {
     #[test]
     fn unknown_extension_renders_plain_with_theme_fg() {
         let lines = ["just text"];
-        let out = styled_lines(&lines, Some("xyz"), Color::Rgb(0xAA, 0xAA, 0xAA), Color::Black);
+        let out = styled_lines(
+            &lines,
+            Some("xyz"),
+            Color::Rgb(0xAA, 0xAA, 0xAA),
+            Color::Black,
+        );
         assert_eq!(out.len(), 1);
-        assert!(out[0]
-            .spans
-            .iter()
-            .all(|span| span.style.fg == Some(Color::Rgb(0xAA, 0xAA, 0xAA))));
+        assert!(
+            out[0]
+                .spans
+                .iter()
+                .all(|span| span.style.fg == Some(Color::Rgb(0xAA, 0xAA, 0xAA)))
+        );
     }
 
     #[test]
     fn every_span_carries_the_theme_background() {
         let lines = ["let x = 1;"];
-        let out = styled_lines(&lines, Some("rs"), Color::Rgb(0xD4, 0xD4, 0xD4), Color::Black);
-        assert!(out[0]
-            .spans
-            .iter()
-            .all(|span| span.style.bg == Some(Color::Black)));
+        let out = styled_lines(
+            &lines,
+            Some("rs"),
+            Color::Rgb(0xD4, 0xD4, 0xD4),
+            Color::Black,
+        );
+        assert!(
+            out[0]
+                .spans
+                .iter()
+                .all(|span| span.style.bg == Some(Color::Black))
+        );
     }
 }
