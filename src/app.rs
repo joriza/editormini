@@ -1,9 +1,9 @@
 //! Terminal application shell: event loop, drawing, and key handling.
 //!
-//! Slice scope (milestone task "TUI shell"): one pane from the pane tree,
-//! tab bar (render + Ctrl+PgUp/PgDn switching), editor viewport with cursor,
-//! Ctrl+S save, Ctrl+Q quit with unsaved-changes prompt. Syntax highlighting,
-//! undo, mouse, and per-pane cursor state arrive in later tasks.
+//! Slice scope: one pane from the pane tree, tab bar (render + Ctrl+PgUp/PgDn
+//! switching), editor viewport with cursor, save (F2/Ctrl+S), quit (Ctrl+Q)
+//! with unsaved-changes prompt, and Insert-key overwrite toggle.
+//! Syntax highlighting, undo, and mouse support arrive in later tasks.
 
 use std::io;
 
@@ -42,16 +42,19 @@ pub struct App {
     pub viewport_w: usize,
     pub quit: bool,
     pub confirm_quit: bool,
+    /// Overwrite mode (Insert key). Off by default: VS Code-style insertion.
+    pub overwrite: bool,
+    /// Transient status message. Persists until the next edit action or the
+    /// next status update, so save results and errors stay readable.
     pub status: String,
     pub lang: Lang,
 }
 
 impl App {
     pub fn new(docs: Vec<Document>, lang: Lang) -> Self {
-        let tree = PaneTree::single(0);
         App {
             docs,
-            tree,
+            tree: PaneTree::single(0),
             active: 0,
             cursor_line: 0,
             cursor_col: 0,
@@ -61,7 +64,8 @@ impl App {
             viewport_w: 1,
             quit: false,
             confirm_quit: false,
-            status: String::new(),
+            overwrite: false,
+            status: i18n::t(lang, Key::StartupHints).to_string(),
             lang,
         }
     }
@@ -102,12 +106,20 @@ impl App {
     // -- Editing -----------------------------------------------------------
 
     fn insert_text(&mut self, text: &str) {
+        self.status.clear();
         let (line, col) = (self.cursor_line, self.cursor_col);
         match self.doc_mut().insert(line, col, text) {
             Ok(_) => {
                 let parts: Vec<&str> = text.split('\n').collect();
                 self.cursor_line += parts.len() - 1;
-                self.cursor_col = parts.last().map(|s| s.chars().count()).unwrap_or(0);
+                if parts.len() == 1 {
+                    // Single-line insert: the cursor advances past the text.
+                    self.cursor_col += parts[0].chars().count();
+                } else {
+                    // Multi-line insert: cursor lands at the end of the pasted
+                    // text (start of any tail that was pushed down with it).
+                    self.cursor_col = parts.last().map(|s| s.chars().count()).unwrap_or(0);
+                }
             }
             Err(DocumentError::ReadOnly) => self.status = "read-only".to_string(),
             Err(e) => self.status = format!("{e}"),
@@ -115,7 +127,21 @@ impl App {
         self.clamp_cursor();
     }
 
+    /// Type one printable key. In overwrite mode (Insert), the character under
+    /// the cursor is replaced instead of shifting text right.
+    fn type_char(&mut self, c: char) {
+        if self.overwrite && self.cursor_col < self.doc().line_len(self.cursor_line) {
+            let (line, col) = (self.cursor_line, self.cursor_col);
+            if let Err(e) = self.doc_mut().delete_range(line, col, line, col + 1) {
+                self.status = format!("{e}");
+                return;
+            }
+        }
+        self.insert_text(&c.to_string());
+    }
+
     fn backspace(&mut self) {
+        self.status.clear();
         let (line, col) = (self.cursor_line, self.cursor_col);
         let result = if col > 0 {
             self.doc_mut().delete_range(line, col - 1, line, col)
@@ -135,6 +161,7 @@ impl App {
     }
 
     fn delete_forward(&mut self) {
+        self.status.clear();
         let (line, col) = (self.cursor_line, self.cursor_col);
         let result = if col < self.doc().line_len(line) {
             self.doc_mut().delete_range(line, col, line, col + 1)
@@ -154,7 +181,13 @@ impl App {
     fn save_active(&mut self) {
         match self.doc_mut().save() {
             Ok(bytes) => {
-                self.status = format!("{} ({bytes} B)", i18n::t(self.lang, Key::Saved));
+                let path = self
+                    .doc()
+                    .path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                self.status =
+                    format!("{} {path} ({bytes} B)", i18n::t(self.lang, Key::Saved));
             }
             Err(e) => self.status = format!("{e}"),
         }
@@ -176,9 +209,6 @@ impl App {
         self.scroll_top = 0;
         self.col_off = 0;
         self.clamp_cursor();
-        if let PaneTree::Single(pane) = &mut self.tree {
-            pane.doc = self.active;
-        }
     }
 
     // -- Events ------------------------------------------------------------
@@ -190,11 +220,21 @@ impl App {
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match (key.code, ctrl) {
-            (KeyCode::Char('s'), true) => self.save_active(),
+            (KeyCode::Char('s' | 'S'), true) => self.save_active(),
+            (KeyCode::F(2), _) => self.save_active(),
             (KeyCode::Char('q'), true) => self.request_quit(),
             (KeyCode::PageDown, true) => self.next_doc(1),
             (KeyCode::PageUp, true) => self.next_doc(-1),
-            (KeyCode::Char(c), false) => self.insert_text(&c.to_string()),
+            (KeyCode::Insert, _) => {
+                self.overwrite = !self.overwrite;
+                let key = if self.overwrite {
+                    Key::OverwriteOn
+                } else {
+                    Key::OverwriteOff
+                };
+                self.status = i18n::t(self.lang, key).to_string();
+            }
+            (KeyCode::Char(c), false) => self.type_char(c),
             (KeyCode::Enter, _) => self.insert_text("\n"),
             (KeyCode::Backspace, _) => self.backspace(),
             (KeyCode::Delete, _) => self.delete_forward(),
@@ -254,12 +294,23 @@ impl App {
         match code {
             // [Y]es / [S]í — both keys accepted in both languages.
             KeyCode::Char('y' | 'Y' | 's' | 'S') => {
+                // Save every modified document with a path; a failure keeps
+                // the editor open and shows the error instead of losing work.
+                let mut failure: Option<String> = None;
                 for doc in &mut self.docs {
-                    if doc.is_modified() && doc.path().is_some() {
-                        let _ = doc.save();
-                    }
+                    if doc.is_modified() && doc.path().is_some()
+                        && let Err(e) = doc.save() {
+                            failure = Some(e.to_string());
+                            break;
+                        }
                 }
-                self.quit = true;
+                match failure {
+                    Some(e) => {
+                        self.status = e;
+                        self.confirm_quit = false;
+                    }
+                    None => self.quit = true,
+                }
             }
             KeyCode::Char('n' | 'N') => self.quit = true,
             KeyCode::Char('c' | 'C') | KeyCode::Esc => self.confirm_quit = false,
@@ -371,7 +422,8 @@ impl App {
                 ("col", &(self.cursor_col + 1).to_string()),
             ],
         );
-        let left = format!("{} {}", self.doc_title(self.active).trim_end(), pos);
+        let mode = if self.overwrite { "OVR " } else { "" };
+        let left = format!("{}{mode}{}", self.doc_title(self.active).trim_end(), pos);
         let right = self.status.clone();
         let width = area.width as usize;
         let mut left = left;
@@ -385,7 +437,6 @@ impl App {
         ]);
         let widget = Paragraph::new(line).style(Style::new().fg(Color::White).bg(colors::ACCENT));
         f.render_widget(widget, area);
-        self.status.clear();
     }
 
     /// Sync the pane tree after focus changes (single pane in this slice).
@@ -408,5 +459,201 @@ pub fn run(
             return Ok(());
         }
         app.handle_event(read()?);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn press(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        // KeyEvent::new sets kind = Press, which is what handle_event acts on.
+        KeyEvent::new(code, modifiers)
+    }
+
+    fn plain(code: KeyCode) -> KeyEvent {
+        press(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl(code: KeyCode) -> KeyEvent {
+        press(code, KeyModifiers::CONTROL)
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("editormini_app_{name}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn typed(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.on_key(plain(KeyCode::Char(c)));
+        }
+    }
+
+    #[test]
+    fn typing_inserts_and_advances_cursor() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hola");
+        assert_eq!(app.doc().line(0), "hola");
+        assert_eq!(app.cursor_col, 4);
+        assert!(app.doc().is_modified());
+    }
+
+    #[test]
+    fn ctrl_s_saves_pathed_document_and_reports_bytes() {
+        let dir = temp_dir("save");
+        let path = dir.join("save.txt");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
+        typed(&mut app, "contenido");
+        app.on_key(ctrl(KeyCode::Char('s')));
+        assert!(!app.doc().is_modified(), "save must clear the modified flag");
+        let on_disk = std::fs::read_to_string(&path).expect("file saved");
+        assert_eq!(on_disk, "contenido\r\n");
+        assert!(app.status.contains("Saved"), "status: {}", app.status);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn f2_saves_too() {
+        let dir = temp_dir("f2");
+        let path = dir.join("f2.txt");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
+        typed(&mut app, "x");
+        app.on_key(plain(KeyCode::F(2)));
+        assert!(!app.doc().is_modified());
+        assert_eq!(std::fs::read_to_string(&path).expect("saved"), "x\r\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ctrl_s_on_untitled_shows_persistent_error() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "draft");
+        app.on_key(ctrl(KeyCode::Char('s')));
+        assert!(
+            app.status.contains("file path"),
+            "error must be visible, got: {}",
+            app.status
+        );
+        assert!(app.doc().is_modified(), "untitled save must not lose changes");
+    }
+
+    #[test]
+    fn status_persists_until_next_edit_action() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "abc");
+        app.on_key(ctrl(KeyCode::Char('s')));
+        let error = app.status.clone();
+        assert!(!error.is_empty());
+        // Cursor movement keeps the message visible...
+        app.on_key(plain(KeyCode::Left));
+        assert_eq!(app.status, error);
+        // ...but the next edit action clears it.
+        app.on_key(plain(KeyCode::Char('x')));
+        assert!(app.status.is_empty());
+    }
+
+    #[test]
+    fn insert_toggles_overwrite_replacing_char_under_cursor() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "abc");
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(plain(KeyCode::Right));
+        app.on_key(plain(KeyCode::Insert));
+        assert!(app.overwrite);
+        app.on_key(plain(KeyCode::Char('X')));
+        assert_eq!(app.doc().line(0), "aXc");
+        assert_eq!(app.cursor_col, 2);
+        // Typing past end of line still appends in overwrite mode.
+        app.on_key(plain(KeyCode::End));
+        app.on_key(plain(KeyCode::Char('Z')));
+        assert_eq!(app.doc().line(0), "aXcZ");
+        // Toggle back to insert mode.
+        app.on_key(plain(KeyCode::Insert));
+        assert!(!app.overwrite);
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(plain(KeyCode::Char('-')));
+        assert_eq!(app.doc().line(0), "-aXcZ");
+    }
+
+    #[test]
+    fn ctrl_q_yes_saves_modified_docs_and_quits() {
+        let dir = temp_dir("quityes");
+        let path = dir.join("q.txt");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
+        typed(&mut app, "work");
+        app.on_key(ctrl(KeyCode::Char('q')));
+        assert!(app.confirm_quit);
+        assert!(!app.quit);
+        app.on_key(plain(KeyCode::Char('y')));
+        assert!(app.quit);
+        assert_eq!(std::fs::read_to_string(&path).expect("saved"), "work\r\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ctrl_q_n_quits_without_saving() {
+        let dir = temp_dir("quitno");
+        let path = dir.join("q.txt");
+        std::fs::write(&path, "").expect("pre-create empty file");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
+        typed(&mut app, "work");
+        app.on_key(ctrl(KeyCode::Char('q')));
+        app.on_key(plain(KeyCode::Char('n')));
+        assert!(app.quit);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("untouched"),
+            "",
+            "quit without saving must not write"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ctrl_q_c_cancels_and_keeps_changes() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "keep me");
+        app.on_key(ctrl(KeyCode::Char('q')));
+        assert!(app.confirm_quit);
+        app.on_key(plain(KeyCode::Char('c')));
+        assert!(!app.confirm_quit);
+        assert!(!app.quit);
+        assert_eq!(app.doc().line(0), "keep me");
+    }
+
+    #[test]
+    fn ctrl_pgdn_cycles_documents() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        assert_eq!(app.active, 0);
+        app.on_key(ctrl(KeyCode::PageDown));
+        assert_eq!(app.active, 1);
+        app.on_key(ctrl(KeyCode::PageDown));
+        assert_eq!(app.active, 0, "wraps around");
+        app.on_key(ctrl(KeyCode::PageUp));
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn startup_hints_are_the_first_status() {
+        let app = App::new(vec![Document::new_untitled()], Lang::Es);
+        assert!(app.status.contains("guardar"), "status: {}", app.status);
+    }
+
+    #[test]
+    fn spanish_yes_key_saves_and_quits() {
+        let dir = temp_dir("quitsi");
+        let path = dir.join("q.txt");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::Es);
+        typed(&mut app, "datos");
+        app.on_key(ctrl(KeyCode::Char('q')));
+        app.on_key(plain(KeyCode::Char('s'))); // [S]í
+        assert!(app.quit);
+        assert_eq!(std::fs::read_to_string(&path).expect("saved"), "datos\r\n");
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -70,7 +70,11 @@ impl std::error::Error for DocumentError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditRecord {
     /// Text inserted at a position (may span lines via '\n').
-    Insert { line: usize, col: usize, text: String },
+    Insert {
+        line: usize,
+        col: usize,
+        text: String,
+    },
     /// Contiguous range deleted (may span lines); text is what was removed.
     Delete {
         start_line: usize,
@@ -415,11 +419,12 @@ impl Document {
 
     fn byte_len_hint(&self) -> usize {
         let chars: usize = self.lines.iter().map(|l| l.len() + 1).sum();
-        chars + if self.line_ending == LineEnding::Crlf {
-            self.lines.len()
-        } else {
-            0
-        }
+        chars
+            + if self.line_ending == LineEnding::Crlf {
+                self.lines.len()
+            } else {
+                0
+            }
     }
 }
 
@@ -578,7 +583,8 @@ mod tests {
         let dir = temp_dir("utf8");
         let path = dir.join("utf8.txt");
         let mut doc = Document::new_with_path(&path);
-        doc.insert(0, 0, "ñandú 🦤 español\nsegunda línea").expect("seed");
+        doc.insert(0, 0, "ñandú 🦤 español\nsegunda línea")
+            .expect("seed");
         doc.save().expect("save");
         let doc2 = Document::from_path(&path).expect("reload");
         assert_eq!(doc2.line(0), "ñandú 🦤 español");

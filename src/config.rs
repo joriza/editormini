@@ -98,7 +98,10 @@ mod tests {
         }"#;
         let parsed: Config = serde_json::from_str(raw).expect("parse spanish config");
         assert_eq!(parsed.language, Lang::Es);
-        assert_eq!(parsed.export.markdown_pdf_css.as_deref(), Some("template.css"));
+        assert_eq!(
+            parsed.export.markdown_pdf_css.as_deref(),
+            Some("template.css")
+        );
     }
 
     #[test]

@@ -13,17 +13,21 @@ use clap::Parser;
 use std::io;
 use std::path::PathBuf;
 
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::Terminal;
 
 /// editormini — a VS Code-like TUI text editor.
 #[derive(Parser)]
-#[command(name = "editormini", version, about)]
+#[command(
+    name = "editormini",
+    version,
+    about = "A VS Code-like TUI text editor\n\nKeys: F2 or Ctrl+S save · Ctrl+Q quit · Ins overwrite · Ctrl+PgUp/PgDn switch tab"
+)]
 struct Cli {
     /// Files to open as tabs (created on save if they do not exist)
     files: Vec<PathBuf>,
@@ -39,8 +43,7 @@ fn load_documents(files: &[PathBuf]) -> Result<Vec<document::Document>, String> 
     let mut docs = Vec::with_capacity(files.len());
     for file in files {
         let doc = if file.exists() {
-            document::Document::from_path(file)
-                .map_err(|e| format!("{}: {e}", file.display()))?
+            document::Document::from_path(file).map_err(|e| format!("{}: {e}", file.display()))?
         } else {
             document::Document::new_with_path(file)
         };

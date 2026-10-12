@@ -34,6 +34,12 @@ pub enum Key {
     Saved,
     /// Cursor position template in the status bar.
     LnCol,
+    /// Startup keymap hint shown in the status bar.
+    StartupHints,
+    /// Overwrite mode enabled (Insert key).
+    OverwriteOn,
+    /// Overwrite mode disabled (Insert key).
+    OverwriteOff,
 }
 
 /// Translate `key` for `lang`.
@@ -59,6 +65,16 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::Saved) => "Guardado",
         (Lang::En, Key::LnCol) => "Ln {ln}, Col {col}",
         (Lang::Es, Key::LnCol) => "Ln {ln}, Col {col}",
+        (Lang::En, Key::StartupHints) => {
+            "F2/Ctrl+S save \u{b7} Ctrl+Q quit \u{b7} Ins overwrite \u{b7} Ctrl+PgUp/PgDn switch tab"
+        }
+        (Lang::Es, Key::StartupHints) => {
+            "F2/Ctrl+S guardar \u{b7} Ctrl+Q salir \u{b7} Ins sobrescribir \u{b7} Ctrl+PgUp/PgDn cambiar pesta\u{f1}a"
+        }
+        (Lang::En, Key::OverwriteOn) => "Overwrite ON",
+        (Lang::Es, Key::OverwriteOn) => "Sobrescribir ACTIVADO",
+        (Lang::En, Key::OverwriteOff) => "Overwrite OFF",
+        (Lang::Es, Key::OverwriteOff) => "Sobrescribir DESACTIVADO",
     }
 }
 
@@ -85,6 +101,9 @@ mod tests {
             Key::TerminalRequired,
             Key::Saved,
             Key::LnCol,
+            Key::StartupHints,
+            Key::OverwriteOn,
+            Key::OverwriteOff,
         ] {
             for lang in [Lang::En, Lang::Es] {
                 let msg = t(lang, key);
