@@ -142,6 +142,25 @@ pub struct DocView {
     pub col_off: usize,
 }
 
+/// Selection state per tab: anchor is fixed, head follows the cursor
+/// during Shift+movement. When `None` there is no active selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Selection {
+    pub anchor: (usize, usize),
+    pub head: (usize, usize),
+}
+
+impl Selection {
+    /// Returns `(start, end)` ordered lexicographically by (line, col).
+    fn normalized(&self) -> ((usize, usize), (usize, usize)) {
+        if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
+    }
+}
+
 /// Maximum undo steps kept per tab (oldest dropped first).
 pub const UNDO_LIMIT: usize = 100;
 
@@ -172,6 +191,8 @@ pub struct App {
     pub views: Vec<DocView>,
     /// Bounded edit history per tab, index-aligned with `docs`.
     pub histories: Vec<History>,
+    /// Selection state per tab, index-aligned with `docs`.
+    pub selections: Vec<Option<Selection>>,
     pub cursor_line: usize,
     pub cursor_col: usize,
     pub scroll_top: usize,
@@ -201,12 +222,14 @@ impl App {
     pub fn new(docs: Vec<Document>, lang: Lang) -> Self {
         let views = docs.iter().map(|_| DocView::default()).collect();
         let histories = (0..docs.len()).map(|_| History::new()).collect();
+        let selections = (0..docs.len()).map(|_| None).collect();
         App {
             docs,
             tree: PaneTree::single(0),
             active: 0,
             views,
             histories,
+            selections,
             cursor_line: 0,
             cursor_col: 0,
             scroll_top: 0,
@@ -263,6 +286,306 @@ impl App {
         }
     }
 
+    // -- Selection helpers -----------------------------------------------
+
+    fn clear_selection(&mut self) {
+        self.selections[self.active] = None;
+    }
+
+    fn start_selection(&mut self) {
+        if self.selections[self.active].is_none() {
+            self.selections[self.active] = Some(Selection {
+                anchor: (self.cursor_line, self.cursor_col),
+                head: (self.cursor_line, self.cursor_col),
+            });
+        }
+    }
+
+    fn update_selection_head(&mut self) {
+        if let Some(ref mut sel) = self.selections[self.active] {
+            sel.head = (self.cursor_line, self.cursor_col);
+        }
+    }
+
+    fn normalized_selection(&self) -> Option<((usize, usize), (usize, usize))> {
+        self.selections[self.active].map(|sel| sel.normalized())
+    }
+
+    /// Character-column range of the selection on `buf_line`, or `None`.
+    fn selection_range_for_line(&self, buf_line: usize) -> Option<(usize, usize)> {
+        let ((start_line, start_col), (end_line, end_col)) = self.normalized_selection()?;
+        if buf_line < start_line || buf_line > end_line {
+            return None;
+        }
+        if buf_line == start_line && buf_line == end_line {
+            Some((start_col, end_col))
+        } else if buf_line == start_line {
+            Some((start_col, self.doc().line_len(buf_line)))
+        } else if buf_line == end_line {
+            Some((0, end_col))
+        } else {
+            Some((0, self.doc().line_len(buf_line)))
+        }
+    }
+
+    /// Apply selection background to spans, without overriding search-match bg.
+    fn apply_selection_bg(
+        &self,
+        spans: Vec<Span<'static>>,
+        sel_start: usize,
+        sel_end: usize,
+    ) -> Vec<Span<'static>> {
+        if sel_start >= sel_end {
+            return spans;
+        }
+        let selection_bg = self.theme.selection_bg;
+        let mut result = Vec::new();
+        let mut char_pos = 0;
+        for span in spans {
+            let text = span.content.as_ref();
+            let len = text.chars().count();
+            let span_start = char_pos;
+            let span_end = char_pos + len;
+            if span_end <= sel_start || span_start >= sel_end {
+                result.push(span);
+            } else {
+                let overlap_start = span_start.max(sel_start);
+                let overlap_end = span_end.min(sel_end);
+                if span_start < sel_start {
+                    let before_len = sel_start - span_start;
+                    let before_text: String = text.chars().take(before_len).collect();
+                    result.push(Span::styled(before_text, span.style));
+                }
+                let sel_text_len = overlap_end - overlap_start;
+                let sel_text: String = text
+                    .chars()
+                    .skip(overlap_start - span_start)
+                    .take(sel_text_len)
+                    .collect();
+                result.push(Span::styled(sel_text, span.style.bg(selection_bg)));
+                if span_end > sel_end {
+                    let after_start = sel_end - span_start;
+                    let after_text: String = text.chars().skip(after_start).collect();
+                    result.push(Span::styled(after_text, span.style));
+                }
+            }
+            char_pos += len;
+        }
+        result
+    }
+
+    // -- Word movement helpers -------------------------------------------
+
+    fn is_word_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
+    fn char_class(c: char) -> usize {
+        if Self::is_word_char(c) {
+            0
+        } else if c.is_whitespace() {
+            1
+        } else {
+            2
+        }
+    }
+
+    /// Move cursor one word to the right (VS Code boundaries).
+    fn move_word_right(&mut self) {
+        let doc = self.doc();
+        let (mut line, mut col) = (self.cursor_line, self.cursor_col);
+        // Skip the word/punctuation run under the cursor, if any.
+        if col < doc.line_len(line) {
+            let cls = Self::char_class(doc.line(line).chars().nth(col).unwrap());
+            if cls != 1 {
+                while col < doc.line_len(line)
+                    && Self::char_class(doc.line(line).chars().nth(col).unwrap()) == cls
+                {
+                    col += 1;
+                }
+            }
+        }
+        // Skip whitespace; the line break itself is a word boundary, so the
+        // crossing stops at the arrival column (VS Code: EOL → next line col 0
+        // when the next line starts with a word char).
+        loop {
+            while col < doc.line_len(line)
+                && doc.line(line).chars().nth(col).unwrap().is_whitespace()
+            {
+                col += 1;
+            }
+            if col >= doc.line_len(line) && line + 1 < doc.line_count() {
+                line += 1;
+                col = 0;
+                continue;
+            }
+            break;
+        }
+        self.cursor_line = line;
+        self.cursor_col = col;
+        self.clamp_scroll();
+    }
+
+    /// Move cursor one word to the left (VS Code boundaries).
+    fn move_word_left(&mut self) {
+        let doc = self.doc();
+        let mut line = self.cursor_line;
+        let mut col = self.cursor_col;
+        if col == 0 {
+            if line == 0 {
+                self.clamp_scroll();
+                return;
+            }
+            line -= 1;
+            col = doc.line_len(line);
+        }
+        // Skip the current token backwards
+        let c = doc.line(line).chars().nth(col - 1).unwrap();
+        let cls = Self::char_class(c);
+        while col > 0 {
+            let ch = doc.line(line).chars().nth(col - 1).unwrap();
+            if Self::char_class(ch) == cls {
+                col -= 1;
+            } else {
+                break;
+            }
+        }
+        // Skip whitespace backwards, crossing line boundaries
+        loop {
+            while col > 0 {
+                let ch = doc.line(line).chars().nth(col - 1).unwrap();
+                if ch.is_whitespace() {
+                    col -= 1;
+                } else {
+                    break;
+                }
+            }
+            if col == 0 && line > 0 {
+                line -= 1;
+                col = doc.line_len(line);
+                continue;
+            } else {
+                break;
+            }
+        }
+        self.cursor_line = line;
+        self.cursor_col = col;
+        self.clamp_scroll();
+    }
+
+    // -- Selection movement ---------------------------------------------
+
+    fn ctrl_shift_home_end(&mut self, to_start: bool) {
+        self.start_selection();
+        if to_start {
+            self.cursor_line = 0;
+            self.cursor_col = 0;
+        } else {
+            self.cursor_line = self.doc().line_count().saturating_sub(1);
+            self.cursor_col = self.doc().line_len(self.cursor_line);
+        }
+        self.clamp_cursor();
+        self.clamp_scroll();
+        self.update_selection_head();
+    }
+
+    fn ctrl_home_end(&mut self, to_start: bool) {
+        self.clear_selection();
+        if to_start {
+            self.cursor_line = 0;
+            self.cursor_col = 0;
+        } else {
+            self.cursor_line = self.doc().line_count().saturating_sub(1);
+            self.cursor_col = self.doc().line_len(self.cursor_line);
+        }
+        self.clamp_cursor();
+        self.clamp_scroll();
+    }
+
+    fn ctrl_shift_word_left(&mut self) {
+        self.start_selection();
+        self.move_word_left();
+        self.update_selection_head();
+    }
+
+    fn ctrl_shift_word_right(&mut self) {
+        self.start_selection();
+        self.move_word_right();
+        self.update_selection_head();
+    }
+
+    fn shift_left(&mut self) {
+        self.start_selection();
+        if self.cursor_col > 0 {
+            self.cursor_col -= 1;
+        } else if self.cursor_line > 0 {
+            self.cursor_line -= 1;
+            self.cursor_col = self.doc().line_len(self.cursor_line);
+        }
+        self.clamp_scroll();
+        self.update_selection_head();
+    }
+
+    fn shift_right(&mut self) {
+        self.start_selection();
+        if self.cursor_col < self.doc().line_len(self.cursor_line) {
+            self.cursor_col += 1;
+        } else if self.cursor_line + 1 < self.doc().line_count() {
+            self.cursor_line += 1;
+            self.cursor_col = 0;
+        }
+        self.clamp_scroll();
+        self.update_selection_head();
+    }
+
+    fn shift_up(&mut self) {
+        self.start_selection();
+        self.cursor_line = self.cursor_line.saturating_sub(1);
+        self.clamp_cursor();
+        self.clamp_scroll();
+        self.update_selection_head();
+    }
+
+    fn shift_down(&mut self) {
+        self.start_selection();
+        self.cursor_line += 1;
+        self.clamp_cursor();
+        self.clamp_scroll();
+        self.update_selection_head();
+    }
+
+    fn shift_home(&mut self) {
+        self.start_selection();
+        self.cursor_col = 0;
+        self.clamp_scroll();
+        self.update_selection_head();
+    }
+
+    fn shift_end(&mut self) {
+        self.start_selection();
+        self.cursor_col = self.doc().line_len(self.cursor_line);
+        self.clamp_scroll();
+        self.update_selection_head();
+    }
+
+    fn shift_page_up(&mut self) {
+        self.start_selection();
+        self.cursor_line = self
+            .cursor_line
+            .saturating_sub(self.viewport_h.saturating_sub(1));
+        self.clamp_cursor();
+        self.clamp_scroll();
+        self.update_selection_head();
+    }
+
+    fn shift_page_down(&mut self) {
+        self.start_selection();
+        self.cursor_line += self.viewport_h.saturating_sub(1);
+        self.clamp_cursor();
+        self.clamp_scroll();
+        self.update_selection_head();
+    }
+
     // -- Editing -----------------------------------------------------------
 
     /// Push applied edits into the tab's undo history as one step.
@@ -291,6 +614,7 @@ impl App {
     /// Undo the last step (Ctrl+Z): apply the group's inverses newest-first
     /// and leave the cursor where the undone edit started.
     fn undo(&mut self) {
+        self.clear_selection();
         let Some(group) = self.histories[self.active].undo.pop() else {
             return;
         };
@@ -318,6 +642,7 @@ impl App {
     /// Redo the last undone step (Ctrl+Y): reapply the group oldest-first and
     /// leave the cursor at the end of the last reapplied edit.
     fn redo(&mut self) {
+        self.clear_selection();
         let Some(group) = self.histories[self.active].redo.pop() else {
             return;
         };
@@ -380,6 +705,7 @@ impl App {
     }
 
     fn insert_text(&mut self, text: &str, continues_burst: bool) {
+        self.clear_selection();
         if let Some(record) = self.do_insert(text) {
             self.record_edits(vec![record], continues_burst);
         }
@@ -390,6 +716,7 @@ impl App {
     /// the cursor is replaced instead of shifting text right; the replacement
     /// (delete + insert) is ONE undo step per keystroke.
     fn type_char(&mut self, c: char) {
+        self.clear_selection();
         let mut records: Vec<EditRecord> = Vec::new();
         let overwrite_replaced =
             self.overwrite && self.cursor_col < self.doc().line_len(self.cursor_line);
@@ -417,6 +744,7 @@ impl App {
     }
 
     fn backspace(&mut self) {
+        self.clear_selection();
         let (line, col) = (self.cursor_line, self.cursor_col);
         let result = if col > 0 {
             self.doc_mut().delete_range(line, col - 1, line, col)
@@ -437,6 +765,7 @@ impl App {
     }
 
     fn delete_forward(&mut self) {
+        self.clear_selection();
         let (line, col) = (self.cursor_line, self.cursor_col);
         let result = if col < self.doc().line_len(line) {
             self.doc_mut().delete_range(line, col, line, col + 1)
@@ -561,10 +890,12 @@ impl App {
         self.docs.remove(index);
         self.views.remove(index);
         self.histories.remove(index);
+        self.selections.remove(index);
         if self.docs.is_empty() {
             self.docs.push(Document::new_untitled());
             self.views.push(DocView::default());
             self.histories.push(History::new());
+            self.selections.push(None);
         }
         let target = index.min(self.docs.len() - 1);
         // The closed tab's view is gone; do NOT save the stale cursor into
@@ -641,11 +972,52 @@ impl App {
                 };
                 self.status = i18n::t(self.lang, key).to_string();
             }
-            (KeyCode::Char(c), false, _) => self.type_char(c),
-            (KeyCode::Enter, _, _) => self.insert_text("\n", false),
-            (KeyCode::Backspace, _, _) => self.backspace(),
-            (KeyCode::Delete, _, _) => self.delete_forward(),
+            (KeyCode::Char(c), false, _) => {
+                self.clear_selection();
+                self.type_char(c);
+            }
+            (KeyCode::Enter, _, _) => {
+                self.clear_selection();
+                self.insert_text("\n", false);
+            }
+            (KeyCode::Backspace, _, _) => {
+                self.clear_selection();
+                self.backspace();
+            }
+            (KeyCode::Delete, _, _) => {
+                self.clear_selection();
+                self.delete_forward();
+            }
+            // Esc → collapse selection
+            (KeyCode::Esc, _, _) => self.clear_selection(),
+            // Ctrl+Shift+Home/End → select to document start/end
+            (KeyCode::Home, true, true) => {
+                self.ctrl_shift_home_end(true);
+            }
+            (KeyCode::End, true, true) => {
+                self.ctrl_shift_home_end(false);
+            }
+            // Ctrl+Home/End → jump to document start/end
+            (KeyCode::Home, true, _) => self.ctrl_home_end(true),
+            (KeyCode::End, true, _) => self.ctrl_home_end(false),
+            // Ctrl+Shift+Left/Right → word selection
+            (KeyCode::Left, true, true) => self.ctrl_shift_word_left(),
+            (KeyCode::Right, true, true) => self.ctrl_shift_word_right(),
+            // Ctrl+Left/Right → word movement
+            (KeyCode::Left, true, _) => self.move_word_left(),
+            (KeyCode::Right, true, _) => self.move_word_right(),
+            // Shift+Left/Right/Up/Down/Home/End/PageUp/PageDown → selection
+            (KeyCode::Left, _, true) => self.shift_left(),
+            (KeyCode::Right, _, true) => self.shift_right(),
+            (KeyCode::Up, _, true) => self.shift_up(),
+            (KeyCode::Down, _, true) => self.shift_down(),
+            (KeyCode::Home, _, true) => self.shift_home(),
+            (KeyCode::End, _, true) => self.shift_end(),
+            (KeyCode::PageUp, _, true) => self.shift_page_up(),
+            (KeyCode::PageDown, _, true) => self.shift_page_down(),
+            // Plain movement → clear selection
             (KeyCode::Left, _, _) => {
+                self.clear_selection();
                 if self.cursor_col > 0 {
                     self.cursor_col -= 1;
                 } else if self.cursor_line > 0 {
@@ -655,6 +1027,7 @@ impl App {
                 self.clamp_scroll();
             }
             (KeyCode::Right, _, _) => {
+                self.clear_selection();
                 if self.cursor_col < self.doc().line_len(self.cursor_line) {
                     self.cursor_col += 1;
                 } else if self.cursor_line + 1 < self.doc().line_count() {
@@ -664,24 +1037,29 @@ impl App {
                 self.clamp_scroll();
             }
             (KeyCode::Up, _, _) => {
+                self.clear_selection();
                 self.cursor_line = self.cursor_line.saturating_sub(1);
                 self.clamp_cursor();
                 self.clamp_scroll();
             }
             (KeyCode::Down, _, _) => {
+                self.clear_selection();
                 self.cursor_line += 1;
                 self.clamp_cursor();
                 self.clamp_scroll();
             }
             (KeyCode::Home, _, _) => {
+                self.clear_selection();
                 self.cursor_col = 0;
                 self.clamp_scroll();
             }
             (KeyCode::End, _, _) => {
+                self.clear_selection();
                 self.cursor_col = self.doc().line_len(self.cursor_line);
                 self.clamp_scroll();
             }
             (KeyCode::PageUp, _, _) => {
+                self.clear_selection();
                 self.cursor_line = self
                     .cursor_line
                     .saturating_sub(self.viewport_h.saturating_sub(1));
@@ -689,6 +1067,7 @@ impl App {
                 self.clamp_scroll();
             }
             (KeyCode::PageDown, _, _) => {
+                self.clear_selection();
                 self.cursor_line += self.viewport_h.saturating_sub(1);
                 self.clamp_cursor();
                 self.clamp_scroll();
@@ -799,6 +1178,7 @@ impl App {
                             self.docs.push(doc);
                             self.views.push(DocView::default());
                             self.histories.push(History::new());
+                            self.selections.push(None);
                             self.status = i18n::tr(self.lang, Key::FileOpened, &[("path", path)]);
                         }
                         Err(e) => {
@@ -810,6 +1190,7 @@ impl App {
                     self.docs.push(Document::new_with_path(&pathbuf));
                     self.views.push(DocView::default());
                     self.histories.push(History::new());
+                    self.selections.push(None);
                     self.status = i18n::tr(self.lang, Key::FileOpened, &[("path", path)]);
                 }
             }
@@ -1624,7 +2005,12 @@ impl App {
                 let space_span = Span::styled(" ", num_style);
                 let mut spans = vec![num_span, space_span];
 
-                // Add search match highlights on top of syntax spans.
+                // Apply selection bg first, then search highlights
+                // override selection bg for matched cells.
+                let mut line_spans = line.spans;
+                if let Some((sel_start, sel_end)) = self.selection_range_for_line(buf_line) {
+                    line_spans = self.apply_selection_bg(line_spans, sel_start, sel_end);
+                }
                 if let Some(highlights) = match_highlights.get(&buf_line) {
                     let line_text = self.doc().line(buf_line);
                     let current_idx = self
@@ -1638,10 +2024,10 @@ impl App {
                         current_idx,
                         self.theme.search_match_bg,
                         self.theme.search_current_match_bg,
-                        &line.spans,
+                        &line_spans,
                     ));
                 } else {
-                    spans.extend(line.spans);
+                    spans.extend(line_spans);
                 }
 
                 line.spans = spans;
@@ -1833,12 +2219,17 @@ impl App {
                 let room = width - left_len;
                 right = format!(
                     "{}…",
-                    right.chars().take(room.saturating_sub(1)).collect::<String>()
+                    right
+                        .chars()
+                        .take(room.saturating_sub(1))
+                        .collect::<String>()
                 );
             } else {
                 left = format!(
                     "{}…",
-                    left.chars().take(width.saturating_sub(1)).collect::<String>()
+                    left.chars()
+                        .take(width.saturating_sub(1))
+                        .collect::<String>()
                 );
                 right.clear();
             }
@@ -3439,7 +3830,6 @@ mod tests {
             doc_index: 0,
         }];
         let plain_span = Span::styled(line_text.to_string(), Style::default());
-        let plain_span = Span::styled(line_text.to_string(), Style::default());
         let spans = App::compose_highlight_spans(
             line_text,
             &[],
@@ -4244,4 +4634,418 @@ mod tests {
         let search = app.search.as_ref().unwrap();
         assert!(search.matches.is_empty());
     }
+
+    // ============ T1: Selection state per tab ============
+
+    #[test]
+    fn shift_right_extends_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        // Cursor at col 5. Start selection with Shift+Left.
+        app.on_key(shift(KeyCode::Left));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 4), (0, 5)));
+        // Extend with Shift+Left again.
+        app.on_key(shift(KeyCode::Left));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 3), (0, 5)));
+    }
+
+    #[test]
+    fn shift_left_extends_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        // Move cursor left first so we have room to select leftward.
+        app.on_key(plain(KeyCode::Left));
+        // Cursor at col 4. Start selection with Shift+Right.
+        app.on_key(shift(KeyCode::Right));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 4), (0, 5)));
+    }
+
+    #[test]
+    fn shift_up_down_extend_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "abc\ndef");
+        // Cursor at line 1, col 3. Start selection with Shift+Up.
+        app.on_key(shift(KeyCode::Up));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 3), (1, 3)));
+    }
+
+    #[test]
+    fn shift_home_end_extend_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        // Cursor at col 5. Shift+Home selects to start of line.
+        app.on_key(shift(KeyCode::Home));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 0), (0, 5)));
+        // Shift+End returns the head to the anchor: VS Code keeps the anchor
+        // fixed during selection, so the selection collapses (empty range).
+        app.on_key(shift(KeyCode::End));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 5), (0, 5)));
+    }
+
+    #[test]
+    fn plain_movement_clears_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(shift(KeyCode::Left));
+        assert!(app.normalized_selection().is_some());
+        // Plain Left clears the selection.
+        app.on_key(plain(KeyCode::Left));
+        assert!(app.normalized_selection().is_none());
+    }
+
+    #[test]
+    fn typing_clears_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(shift(KeyCode::Left));
+        assert!(app.normalized_selection().is_some());
+        typed(&mut app, "x");
+        assert!(app.normalized_selection().is_none());
+        assert_eq!(app.doc().line(0), "hellxo");
+    }
+
+    #[test]
+    fn backspace_clears_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(shift(KeyCode::Left));
+        assert!(app.normalized_selection().is_some());
+        app.on_key(plain(KeyCode::Backspace));
+        assert!(app.normalized_selection().is_none());
+    }
+
+    #[test]
+    fn delete_forward_clears_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(shift(KeyCode::Left));
+        assert!(app.normalized_selection().is_some());
+        app.on_key(plain(KeyCode::Delete));
+        assert!(app.normalized_selection().is_none());
+    }
+
+    #[test]
+    fn undo_clears_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(shift(KeyCode::Left));
+        assert!(app.normalized_selection().is_some());
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert!(app.normalized_selection().is_none());
+    }
+
+    #[test]
+    fn redo_clears_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        app.on_key(shift(KeyCode::Left));
+        assert!(app.normalized_selection().is_some());
+        app.on_key(ctrl(KeyCode::Char('y')));
+        assert!(app.normalized_selection().is_none());
+    }
+
+    #[test]
+    fn esc_clears_selection() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(shift(KeyCode::Left));
+        assert!(app.normalized_selection().is_some());
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.normalized_selection().is_none());
+    }
+
+    #[test]
+    fn selection_persists_across_tab_switches() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        typed(&mut app, "hello");
+        app.on_key(shift(KeyCode::Left));
+        assert!(app.normalized_selection().is_some());
+        app.on_key(ctrl(KeyCode::PageDown));
+        // Tab 1 has no selection.
+        assert!(app.normalized_selection().is_none());
+        app.on_key(ctrl(KeyCode::PageUp));
+        // Back to tab 0, selection is preserved.
+        assert!(app.normalized_selection().is_some());
+    }
+
+    #[test]
+    fn normalized_selection_orders_anchor_head() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        // Select right-to-left (anchor > head).
+        app.on_key(shift(KeyCode::Left));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel.0, (0, 4)); // start is the smaller
+        assert_eq!(sel.1, (0, 5)); // end is the larger
+    }
+
+    // ============ T2: Render selection with theme ============
+
+    #[test]
+    fn selection_bg_rendered_dark_plus() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.set_theme(ThemeChoice::DarkPlus);
+        typed(&mut app, "hello");
+        // Move cursor to col 1, then Shift+Right 4 times to select "ello" (cols 1-5).
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(plain(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        // Cell at col 3 is the first SELECTED char ('e': gutter 2 + col 1)
+        // and must have Dark+ selection_bg = 0x264F78.
+        let cell = terminal.backend().buffer().get(3, 1);
+        assert_eq!(cell.style().bg, Some(Color::Rgb(0x26, 0x4F, 0x78)));
+    }
+
+    #[test]
+    fn selection_bg_rendered_light_plus() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.set_theme(ThemeChoice::LightPlus);
+        typed(&mut app, "hello");
+        // Move cursor to col 1, then Shift+Right 4 times to select "ello" (cols 1-5).
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(plain(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        app.on_key(shift(KeyCode::Right));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        // Cell at col 3 is the first SELECTED char ('e') and must have
+        // Light+ selection_bg = 0xADD8E6.
+        let cell = terminal.backend().buffer().get(3, 1);
+        assert_eq!(cell.style().bg, Some(Color::Rgb(0xAD, 0xD8, 0xE6)));
+    }
+
+    #[test]
+    fn selection_bg_does_not_override_search_match_bg() {
+        let dir = temp_dir("sel_vs_search");
+        let path = dir.join("sel_vs_search.txt");
+        std::fs::write(&path, "xx\nhello world").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.set_theme(ThemeChoice::DarkPlus);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        // Prime the viewport: a real app is drawn between keystrokes, so
+        // clamp_scroll has a real viewport height to work with.
+        terminal.draw(|f| app.draw(f)).unwrap();
+        // Select the whole second line BEFORE opening search: movement keys
+        // are consumed by the dialog while it is open.
+        app.on_key(plain(KeyCode::Down));
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(shift(KeyCode::End));
+        // Search for "world": it sits on line 1, cols 6-11, inside the
+        // selection.
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "world");
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        // Frame rows: 1 = dialog bar overlaying line 0, 2 = line 1; gutter 2.
+        // The current match "world" (buffer col 2+6=8, row 2) keeps the
+        // current-match bg even though it lies inside the selection...
+        let match_cell = terminal.backend().buffer().get(8, 2);
+        assert_eq!(match_cell.style().bg, Some(Color::Rgb(0x9E, 0x6A, 0x03)));
+        // ...while selected non-match cells keep the selection bg.
+        let sel_cell = terminal.backend().buffer().get(2, 2);
+        assert_eq!(sel_cell.style().bg, Some(Color::Rgb(0x26, 0x4F, 0x78)));
+        let _ = dir;
+    }
+
+    // ============ T3: Ctrl+Word movement ============
+
+    #[test]
+    fn ctrl_right_moves_to_next_word() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello world");
+        // Move cursor to start of line first.
+        app.on_key(plain(KeyCode::Home));
+        // Ctrl+Right should go to col 6 (start of "world").
+        app.on_key(ctrl(KeyCode::Right));
+        assert_eq!(app.cursor_col, 6, "should land at start of next word");
+    }
+
+    #[test]
+    fn ctrl_left_moves_to_prev_word_end() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello world");
+        // Move cursor to start of "world" (col 6).
+        app.on_key(ctrl(KeyCode::Right));
+        // Ctrl+Left should go to end of "hello" (col 5, the space).
+        app.on_key(ctrl(KeyCode::Left));
+        assert_eq!(app.cursor_col, 5, "should land at end of previous word");
+    }
+
+    #[test]
+    fn ctrl_right_crosses_whitespace() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello  world");
+        // Move cursor to start of line first.
+        app.on_key(plain(KeyCode::Home));
+        // Ctrl+Right should skip double space.
+        app.on_key(ctrl(KeyCode::Right));
+        assert_eq!(
+            app.cursor_col, 7,
+            "should skip whitespace and land at start of next word"
+        );
+    }
+
+    #[test]
+    fn ctrl_right_stops_at_punctuation() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello, world");
+        // Move cursor to start of line first.
+        app.on_key(plain(KeyCode::Home));
+        // Ctrl+Right should stop at the comma.
+        app.on_key(ctrl(KeyCode::Right));
+        assert_eq!(app.cursor_col, 5, "should stop at punctuation");
+    }
+
+    #[test]
+    fn ctrl_left_crosses_whitespace() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello  world");
+        // Move to start of "world" (col 7).
+        app.on_key(ctrl(KeyCode::Right));
+        // Ctrl+Left should skip double space and land at end of "hello".
+        app.on_key(ctrl(KeyCode::Left));
+        assert_eq!(
+            app.cursor_col, 5,
+            "should skip whitespace and land at end of prev word"
+        );
+    }
+
+    #[test]
+    fn ctrl_right_crosses_lines() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello\nworld");
+        // Move to start of line 0 (typed leaves the cursor at doc end).
+        app.on_key(plain(KeyCode::Up));
+        app.on_key(plain(KeyCode::Home));
+        // Ctrl+Right should cross to start of "world" on line 1.
+        app.on_key(ctrl(KeyCode::Right));
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 0, "should cross to start of next line");
+    }
+
+    #[test]
+    fn ctrl_left_crosses_lines() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello\nworld");
+        // Move to start of "world" (line 1, col 0).
+        app.on_key(ctrl(KeyCode::Right));
+        // Ctrl+Left should go to end of "hello" (line 0, col 5).
+        app.on_key(ctrl(KeyCode::Left));
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 5, "should cross to end of prev line");
+    }
+
+    #[test]
+    fn ctrl_shift_right_extends_selection_by_word() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello world");
+        // Move cursor to start of line first.
+        app.on_key(plain(KeyCode::Home));
+        // Ctrl+Shift+Right selects to start of "world".
+        app.on_key(ctrl_shift(KeyCode::Right));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 0), (0, 6)));
+    }
+
+    #[test]
+    fn ctrl_shift_left_extends_selection_by_word() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello world");
+        // Move to start of "world" (col 6): Home, then one word right.
+        // (Ctrl+Right at doc end would be a no-op, like VS Code.)
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(ctrl(KeyCode::Right));
+        // Ctrl+Shift+Left selects back to end of "hello".
+        app.on_key(ctrl_shift(KeyCode::Left));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 5), (0, 6)));
+    }
+
+    #[test]
+    fn ctrl_home_moves_to_doc_start() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(plain(KeyCode::End));
+        assert_eq!(app.cursor_col, 5);
+        app.on_key(ctrl(KeyCode::Home));
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 0);
+    }
+
+    #[test]
+    fn ctrl_end_moves_to_doc_end() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(ctrl(KeyCode::End));
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 5);
+    }
+
+    #[test]
+    fn ctrl_shift_home_selects_to_doc_start() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(plain(KeyCode::End));
+        app.on_key(ctrl_shift(KeyCode::Home));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 0), (0, 5)));
+    }
+
+    #[test]
+    fn ctrl_shift_end_selects_to_doc_end() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello");
+        app.on_key(ctrl(KeyCode::Home));
+        app.on_key(ctrl_shift(KeyCode::End));
+        let sel = app.normalized_selection().unwrap();
+        assert_eq!(sel, ((0, 0), (0, 5)));
+    }
+
+    #[test]
+    fn ctrl_right_at_end_of_line_goes_to_next_line() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello\nworld");
+        // Move to end of line 0 (typed leaves the cursor at doc end).
+        app.on_key(plain(KeyCode::Up));
+        app.on_key(plain(KeyCode::End));
+        // Ctrl+Right should cross to start of "world" on line 1.
+        app.on_key(ctrl(KeyCode::Right));
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 0);
+    }
+
+    #[test]
+    fn ctrl_left_at_start_of_line_goes_to_prev_line() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "hello\nworld");
+        // Move to start of "world" (line 1, col 0).
+        app.on_key(ctrl(KeyCode::Right));
+        // Ctrl+Left should cross to end of "hello" on line 0.
+        app.on_key(ctrl(KeyCode::Left));
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 5);
+    }
+
+
 }

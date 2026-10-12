@@ -26,6 +26,8 @@ pub struct Theme {
     pub search_match_bg: Color,
     /// Background for the current (active) search match (stronger highlight).
     pub search_current_match_bg: Color,
+    /// Background for text selection.
+    pub selection_bg: Color,
 }
 
 /// VS Code Dark+ chrome palette (milestone default).
@@ -42,6 +44,7 @@ pub const DARK_PLUS: Theme = Theme {
     line_number_cursor_fg: Color::Rgb(0xD4, 0xD4, 0xD4),
     search_match_bg: Color::Rgb(0x61, 0x32, 0x14),
     search_current_match_bg: Color::Rgb(0x9E, 0x6A, 0x03),
+    selection_bg: Color::Rgb(0x26, 0x4F, 0x78),
 };
 
 /// Light+ placeholder: proves the theme-switch path end to end; the real
@@ -59,6 +62,7 @@ pub const LIGHT_PLUS_STUB: Theme = Theme {
     line_number_cursor_fg: Color::Rgb(0x33, 0x33, 0x33),
     search_match_bg: Color::Rgb(0xFF, 0xE0, 0xB2),
     search_current_match_bg: Color::Rgb(0xFF, 0xC1, 0x07),
+    selection_bg: Color::Rgb(0xAD, 0xD8, 0xE6),
 };
 
 impl Theme {
