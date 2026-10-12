@@ -945,6 +945,10 @@ impl App {
             (KeyCode::Enter, _, _) => {
                 self.search_next_match();
             }
+            // Shift+F3 = previous match (fallback for Shift+Enter).
+            (KeyCode::F(3), _, true) => {
+                self.search_prev_match();
+            }
             // F3 = next match (function-key fallback for Enter, both modes).
             // Outside the dialog F3 keeps its save-all binding.
             (KeyCode::F(3), _, _) => {
@@ -1804,30 +1808,40 @@ impl App {
             String::new()
         };
         let mut left = format!(
-            "{}{mode}{pos}{read_only}",
+            "{} {mode}{pos}{read_only}",
             self.doc_title(self.active).trim_end()
         );
         let ext = highlight::extension_of(doc.path());
         let language = highlight::language_name(ext.as_deref())
             .unwrap_or_else(|| i18n::t(self.lang, Key::PlainText));
-        // Build stamp (UTC MMDD-HHMM from build.rs) + package version, so a
-        // tester can tell at a glance which build is on screen.
+        // Build stamp (UTC MMDD-HHMM from build.rs) + package version first,
+        // then the language indicator further right (VS Code order), then the
+        // transient status message at the far right.
         let build_id = option_env!("EDITORMINI_BUILD_ID").unwrap_or("dev");
-        let right = format!(
-            " {language} v{}·{build_id} {}",
+        let mut right = format!(
+            " v{}·{build_id} {language} {}",
             env!("CARGO_PKG_VERSION"),
             self.status
         );
-        // Truncate left with ellipsis when total content exceeds width.
+        // The left side (doc identity + position) always wins the room it
+        // needs; the right side is trimmed with an ellipsis when narrow.
+        // Owner-visible: long hints used to crowd the filename out entirely.
+        let left_len = left.chars().count();
         let right_len = right.chars().count();
-        let available = width.saturating_sub(right_len);
-        if left.chars().count() > available {
-            let truncate_to = available.saturating_sub(1);
-            left = if truncate_to > 0 {
-                format!("{}…", left.chars().take(truncate_to).collect::<String>())
+        if left_len + right_len > width {
+            if left_len < width {
+                let room = width - left_len;
+                right = format!(
+                    "{}…",
+                    right.chars().take(room.saturating_sub(1)).collect::<String>()
+                );
             } else {
-                "…".to_string()
-            };
+                left = format!(
+                    "{}…",
+                    left.chars().take(width.saturating_sub(1)).collect::<String>()
+                );
+                right.clear();
+            }
         }
         (left, right)
     }
@@ -3143,6 +3157,30 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_separates_filename_from_cursor_position() {
+        // Owner: the end of the filename ran into the Ln/Col coordinates.
+        let dir = temp_dir("status_spacing");
+        let path = dir.join("notes.txt");
+        let app = App::new(vec![Document::new_with_path(&path)], Lang::En);
+        let (left, _) = app.status_line(120);
+        assert!(left.contains("notes.txt Ln"), "left: {left}");
+        let _ = dir;
+    }
+
+    #[test]
+    fn language_indicator_sits_right_of_the_build_stamp() {
+        // Owner: like VS Code, the recognized language belongs further right.
+        let app = App::new(vec![Document::new_untitled()], Lang::En);
+        let (_, right) = app.status_line(120);
+        let version = right.find("v0.").expect("version marker");
+        let language = right.find("Plain text").expect("language");
+        assert!(
+            version < language,
+            "language must sit right of the build stamp: {right}"
+        );
+    }
+
+    #[test]
     fn status_line_shows_read_only_marker() {
         let mut doc = Document::new_with_path(std::path::Path::new("/tmp/big.bin"));
         doc.set_read_only();
@@ -3193,8 +3231,13 @@ mod tests {
         let (left, _) = app.status_line(20);
         // With a 20-char-wide viewport the left segment must be
         // shorter than the full (very long) title and must end with ellipsis.
-        assert!(left.len() < 20, "left len: {}", left.len());
-        assert!(left.ends_with("…"), "left should end with ellipsis: {left}");
+        // (Char count: the ellipsis itself is 3 UTF-8 bytes.)
+        assert!(
+            left.chars().count() <= 20,
+            "left len: {}",
+            left.chars().count()
+        );
+        assert!(left.ends_with('…'), "left should end with ellipsis: {left}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3326,6 +3369,24 @@ mod tests {
         assert_eq!(app.search.as_ref().unwrap().current_idx, Some(1));
         // Shift+Enter goes back to match 0.
         app.on_key(shift(KeyCode::Enter));
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shift_f3_navigates_prev_match() {
+        let dir = temp_dir("search_shift_f3");
+        let path = dir.join("shift_f3.txt");
+        std::fs::write(&path, "rust one\nrust two\nrust three\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "rust");
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(0));
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(1));
+        // Shift+F3 = previous match (function-key fallback for Shift+Enter).
+        // Three matches keep this unambiguous: next would wrap to 2, prev is 0.
+        app.on_key(shift(KeyCode::F(3)));
         assert_eq!(app.search.as_ref().unwrap().current_idx, Some(0));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3583,13 +3644,20 @@ mod tests {
             s
         };
         // Query focused: its label+value are bracketed.
-        assert!(row(&terminal).contains("[Query: beta]"), "row: {}", row(&terminal));
+        assert!(
+            row(&terminal).contains("[Query: beta]"),
+            "row: {}",
+            row(&terminal)
+        );
         // Switch to the replacement field: the brackets move there.
         app.on_key(plain(KeyCode::Tab));
         terminal.draw(|f| app.draw(f)).unwrap();
         let r = row(&terminal);
         assert!(r.contains("[Replace with:"), "row: {r}");
-        assert!(!r.contains('>') && !r.contains('<'), "no cryptic marker: {r}");
+        assert!(
+            !r.contains('>') && !r.contains('<'),
+            "no cryptic marker: {r}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
