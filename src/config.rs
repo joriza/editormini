@@ -1,7 +1,9 @@
 //! Configuration loading.
 //!
 //! `editormini.json` lives beside the executable (portable-first: copy the exe,
-//! copy the config). Absent file means defaults; malformed file is a hard error
+//! copy the config). In dev builds (`cargo run`) that resolves to
+//! `target/debug/`, so drop a config there to exercise non-default settings.
+//! Absent file means defaults; malformed file is a hard error
 //! so silent misconfiguration never happens. Unknown fields are ignored for
 //! forward compatibility.
 
