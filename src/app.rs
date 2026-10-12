@@ -949,6 +949,11 @@ impl App {
             (KeyCode::Enter, _, _) => {
                 self.search_next_match();
             }
+            // F3 = next match (function-key fallback for Enter, both modes).
+            // Outside the dialog F3 keeps its save-all binding.
+            (KeyCode::F(3), _, _) => {
+                self.search_next_match();
+            }
             // F5 = replace current match (fallback for Ctrl+Enter).
             (KeyCode::F(5), _, _) if is_replace => {
                 self.replace_current_match();
@@ -1712,19 +1717,23 @@ impl App {
             };
             let dialog_text = if is_replace {
                 let replacement = &search.replacement;
-                let field_marker = if search.field_focus == ReplaceField::Query {
-                    ">"
-                } else {
-                    "<"
+                // The ACTIVE field is wrapped in brackets — the old ">"/"<"
+                // marker did not communicate which field receives typing.
+                let (q_open, q_close, r_open, r_close) = match search.field_focus {
+                    ReplaceField::Query => ("[", "]", " ", " "),
+                    ReplaceField::Replacement => (" ", " ", "[", "]"),
                 };
                 format!(
-                    "{}  {} {}  {} {}  {} {}",
+                    "{}  {}{} {}{}  {}{} {}{}  {}",
                     i18n::t(self.lang, Key::ReplaceDialogTitle),
+                    q_open,
                     i18n::t(self.lang, Key::ReplaceFieldQuery),
                     query,
-                    field_marker,
+                    q_close,
+                    r_open,
                     i18n::t(self.lang, Key::ReplaceFieldReplacement),
                     replacement,
+                    r_close,
                     counter
                 )
             } else {
@@ -3280,6 +3289,21 @@ mod tests {
     }
 
     #[test]
+    fn f3_navigates_next_match() {
+        let dir = temp_dir("search_f3_next");
+        let path = dir.join("search_f3.txt");
+        std::fs::write(&path, "rust is great\nrust is fast\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "rust");
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(0));
+        // F3 is the function-key fallback for Enter = next match.
+        app.on_key(plain(KeyCode::F(3)));
+        assert_eq!(app.search.as_ref().unwrap().current_idx, Some(1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn shift_enter_navigates_prev_match() {
         let dir = temp_dir("search_prev");
         let path = dir.join("search.txt");
@@ -3527,6 +3551,38 @@ mod tests {
             assert_ne!(fg, Some(Color::Rgb(0x85, 0x85, 0x85)), "col {col}");
         }
         let _ = dir;
+    }
+
+    // The replace dialog must make the ACTIVE field obvious: brackets wrap
+    // the focused field's label+value, no cryptic ">"/"<" marker.
+    #[test]
+    fn replace_dialog_marks_active_field_with_brackets() {
+        let dir = temp_dir("replace_dialog_brackets");
+        let path = dir.join("replace_brackets.txt");
+        std::fs::write(&path, "alpha beta\n").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        typed(&mut app, "beta");
+        app.on_key(ctrl(KeyCode::Char('h')));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let row = |t: &ratatui::Terminal<ratatui::backend::TestBackend>| {
+            let mut s = String::new();
+            for col in 0..80u16 {
+                s.push_str(t.backend().buffer().get(col, 1).symbol());
+            }
+            s
+        };
+        // Query focused: its label+value are bracketed.
+        assert!(row(&terminal).contains("[Query: beta]"), "row: {}", row(&terminal));
+        // Switch to the replacement field: the brackets move there.
+        app.on_key(plain(KeyCode::Tab));
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let r = row(&terminal);
+        assert!(r.contains("[Replace with:"), "row: {r}");
+        assert!(!r.contains('>') && !r.contains('<'), "no cryptic marker: {r}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // R3-005: Ctrl+H opens the replace dialog.
