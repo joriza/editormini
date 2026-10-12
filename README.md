@@ -43,6 +43,8 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | `Ctrl+O` | abrir archivo (prompt de ruta) |
 | `Ctrl+F` | buscar en el documento activo (diálogo con contador; `Enter`/`Shift+Enter` siguiente/anterior, `Esc` cierra; opciones case/regex a futuro) |
 | `Ctrl+H` | reemplazar en el documento activo (diálogo con pestaña entre Query/Replace, `F5` reemplaza actual, `F6` reemplaza todo con confirmación Y/N) |
+| `Ctrl+Shift+F` | buscar en todos los documentos abiertos (itera coincidencias en orden de pestañas, cambia de pestaña al cruzar límites, muestra título del doc actual; `Esc` restaura la pestaña de inicio si no se navegó) |
+| `Ctrl+Shift+H` | reemplazar en todos los documentos abiertos (reemplaza actual y avanza cambiando pestañas; reemplazar todo con confirmación única muestra total de ocurrencias y número de archivos; docs solo-lectura se omiten; deshacer por pestaña) |
 | Clic izquierdo en el editor | colocar el cursor (se adapta al desplazamiento) |
 | Números de línea | margen de números de línea siempre visible, alineados a la derecha, con énfasis en la línea del cursor |
 | Clic izquierdo en una pestaña | cambiar al documento de esa pestaña |

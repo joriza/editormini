@@ -33,8 +33,9 @@ pub enum ConfirmKind {
     Quit,
     /// Close the tab at this document index.
     CloseTab(usize),
-    /// Replace all occurrences in the active document.
-    ReplaceAll(usize),
+    /// Replace all occurrences.
+    /// Second element is the number of documents affected (1 for active-doc, >1 for cross-doc).
+    ReplaceAll(usize, usize),
 }
 
 /// Whether the search/replace dialog is in find mode or replace mode.
@@ -74,6 +75,8 @@ struct MatchPos {
     line: usize,
     start_col: usize,
     end_col: usize,
+    /// Index of the document this match belongs to.
+    doc_index: usize,
 }
 
 /// State of the active search/replace dialog.
@@ -90,6 +93,10 @@ pub struct SearchState {
     navigated: bool,
     mode: SearchMode,
     field_focus: ReplaceField,
+    /// True when searching/replacing across all open documents.
+    cross_doc: bool,
+    /// Document index where the search was initiated (for Esc restore).
+    start_doc: usize,
 }
 
 impl SearchState {
@@ -104,6 +111,8 @@ impl SearchState {
             navigated: false,
             mode: SearchMode::Find,
             field_focus: ReplaceField::Query,
+            cross_doc: false,
+            start_doc: 0,
         }
     }
 
@@ -118,6 +127,8 @@ impl SearchState {
             navigated: false,
             mode: SearchMode::Replace,
             field_focus: ReplaceField::Query,
+            cross_doc: false,
+            start_doc: 0,
         }
     }
 }
@@ -576,9 +587,20 @@ impl App {
 
     pub fn on_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         // Ctrl+H opens the replace dialog (even when search is active).
+        // Ctrl+Shift+H opens cross-doc replace.
         if ctrl && matches!(key.code, KeyCode::Char('h' | 'H')) {
-            self.open_replace();
+            if shift {
+                self.open_cross_doc_replace();
+            } else {
+                self.open_replace();
+            }
+            return;
+        }
+        // Ctrl+Shift+F opens cross-doc find.
+        if ctrl && shift && matches!(key.code, KeyCode::Char('f' | 'F')) {
+            self.open_cross_doc_search();
             return;
         }
         if self.confirm.is_some() {
@@ -593,8 +615,6 @@ impl App {
             self.on_prompt_key(key);
             return;
         }
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match (key.code, ctrl, shift) {
             // Ctrl+Shift+S → save all (must precede plain Ctrl+S)
             (KeyCode::Char('s' | 'S'), true, true) => self.save_all(),
@@ -732,11 +752,11 @@ impl App {
                 self.close_tab(index);
             }
             // Replace-all confirmation: Y/yes/S/sí performs the replacement.
-            (ConfirmKind::ReplaceAll(count), KeyCode::Char('y' | 'Y' | 's' | 'S')) => {
+            (ConfirmKind::ReplaceAll(count, _), KeyCode::Char('y' | 'Y' | 's' | 'S')) => {
                 self.confirm = None;
                 self.perform_replace_all(count);
             }
-            (ConfirmKind::ReplaceAll(_), KeyCode::Char('n' | 'N')) => {
+            (ConfirmKind::ReplaceAll(_, _), KeyCode::Char('n' | 'N')) => {
                 self.confirm = None;
             }
             (_, KeyCode::Char('c' | 'C')) | (_, KeyCode::Esc) => self.confirm = None,
@@ -848,6 +868,44 @@ impl App {
         }
     }
 
+    /// Open cross-doc find dialog (Ctrl+Shift+F), searching all open tabs.
+    fn open_cross_doc_search(&mut self) {
+        let pre_line = self.cursor_line;
+        let pre_col = self.cursor_col;
+        let mut search = SearchState::new_find(String::new(), vec![]);
+        search.pre_search_line = pre_line;
+        search.pre_search_col = pre_col;
+        search.cross_doc = true;
+        search.start_doc = self.active;
+        self.search = Some(search);
+    }
+
+    /// Open cross-doc replace dialog (Ctrl+Shift+H), searching all open tabs.
+    fn open_cross_doc_replace(&mut self) {
+        let pre_line = self.cursor_line;
+        let pre_col = self.cursor_col;
+        let query = self
+            .search
+            .as_ref()
+            .map(|s| s.query.clone())
+            .unwrap_or_default();
+        let matches = self.find_matches(&query);
+        let has_matches = !matches.is_empty();
+        let first_idx = has_matches.then_some(0);
+        let mut search = SearchState::new_replace(query, matches);
+        search.pre_search_line = pre_line;
+        search.pre_search_col = pre_col;
+        search.current_idx = first_idx;
+        search.navigated = false;
+        search.cross_doc = true;
+        search.start_doc = self.active;
+        let has_matches = !search.matches.is_empty();
+        self.search = Some(search);
+        if has_matches {
+            self.goto_match(0);
+        }
+    }
+
     /// Handle keys while the search/replace dialog is open.
     fn on_search_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -858,6 +916,7 @@ impl App {
             .is_some_and(|s| s.mode == SearchMode::Replace);
         match (key.code, ctrl, shift) {
             // Esc closes the dialog; restore cursor if no navigation.
+            // For cross-doc searches, also restores the starting doc.
             (KeyCode::Esc, _, _) => {
                 let restore_cursor = self.search.as_ref().is_some_and(|s| !s.navigated);
                 if restore_cursor {
@@ -866,6 +925,12 @@ impl App {
                         .as_ref()
                         .map(|s| (s.pre_search_line, s.pre_search_col))
                         .unwrap();
+                    if self.search.as_ref().is_some_and(|s| s.cross_doc) {
+                        let start_doc = self.search.as_ref().map(|s| s.start_doc).unwrap_or(0);
+                        if start_doc != self.active {
+                            self.switch_to(start_doc);
+                        }
+                    }
                     self.cursor_line = pre_line;
                     self.cursor_col = pre_col;
                 }
@@ -963,10 +1028,11 @@ impl App {
 
     /// Replace the current match with the replacement text and
     /// advance to the next match. Routes through document edit
-    /// ops so Ctrl+Z undoes the replacement.
+    /// ops so Ctrl+Z undoes the replacement. For cross-doc
+    /// searches, switches tabs to the match's document first.
     fn replace_current_match(&mut self) {
         // Extract all needed data from search before any mutable borrows.
-        let (m, replacement, query) = {
+        let (m, replacement, query, cross_doc) = {
             let Some(search) = &self.search else {
                 return;
             };
@@ -979,8 +1045,13 @@ impl App {
             let m = search.matches[idx];
             let replacement = search.replacement.clone();
             let query = search.query.clone();
-            (m, replacement, query)
+            let cross_doc = search.cross_doc;
+            (m, replacement, query, cross_doc)
         };
+        // For cross-doc, switch to the match's document first.
+        if cross_doc && m.doc_index != self.active {
+            self.switch_to(m.doc_index);
+        }
         // Delete the match then insert the replacement; both
         // records are pushed as one undo step.
         let delete_record =
@@ -1038,7 +1109,17 @@ impl App {
         if search.matches.is_empty() {
             return;
         }
-        self.confirm = Some(ConfirmKind::ReplaceAll(search.matches.len()));
+        let doc_count = if search.cross_doc {
+            search
+                .matches
+                .iter()
+                .map(|m| m.doc_index)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        } else {
+            1
+        };
+        self.confirm = Some(ConfirmKind::ReplaceAll(search.matches.len(), doc_count));
     }
 
     /// Perform the replace-all: iterate matches in reverse order
@@ -1055,33 +1136,94 @@ impl App {
             .as_ref()
             .map(|s| s.replacement.clone())
             .unwrap_or_default();
+        let cross_doc = self.search.as_ref().is_some_and(|s| s.cross_doc);
         let matches: Vec<MatchPos> = self.find_matches(&query);
         if matches.is_empty() {
             return;
         }
-        let mut records: Vec<EditRecord> = Vec::new();
-        // Process bottom-to-top so earlier offsets stay valid.
-        for m in matches.iter().rev() {
-            if let Ok(delete_rec) =
-                self.doc_mut()
-                    .delete_range(m.line, m.start_col, m.line, m.end_col)
-            {
-                if let Ok(insert_rec) = self.doc_mut().insert(m.line, m.start_col, &replacement) {
-                    records.push(delete_rec);
-                    records.push(insert_rec);
-                } else {
-                    // If insert fails, undo the delete for this match.
-                    let _ = self.doc_mut().apply(&delete_rec.inverse());
+        if cross_doc {
+            // Group matches by document for per-doc undo.
+            let mut doc_matches: std::collections::HashMap<usize, Vec<MatchPos>> =
+                std::collections::HashMap::new();
+            for m in matches {
+                doc_matches.entry(m.doc_index).or_default().push(m);
+            }
+            let mut total_replaced = 0usize;
+            let mut skipped = 0usize;
+            for doc_idx in 0..self.docs.len() {
+                let doc_m = match doc_matches.get(&doc_idx) {
+                    Some(m) => m.clone(),
+                    None => continue,
+                };
+                if self.docs[doc_idx].is_read_only() {
+                    skipped += 1;
+                    continue;
+                }
+                if doc_m.is_empty() {
+                    continue;
+                }
+                // Temporarily switch active so doc_mut and record_edits target it.
+                let prev_active = self.active;
+                self.active = doc_idx;
+                let mut records: Vec<EditRecord> = Vec::new();
+                for m in doc_m.iter().rev() {
+                    if let Ok(delete_rec) =
+                        self.doc_mut()
+                            .delete_range(m.line, m.start_col, m.line, m.end_col)
+                    {
+                        if let Ok(insert_rec) =
+                            self.doc_mut().insert(m.line, m.start_col, &replacement)
+                        {
+                            records.push(delete_rec);
+                            records.push(insert_rec);
+                        } else {
+                            let _ = self.doc_mut().apply(&delete_rec.inverse());
+                        }
+                    }
+                }
+                if !records.is_empty() {
+                    self.record_edits(records, false);
+                    total_replaced += doc_m.len();
+                }
+                self.active = prev_active;
+            }
+            if total_replaced > 0 {
+                self.status = i18n::tr(
+                    self.lang,
+                    Key::ReplacedCount,
+                    &[("count", &total_replaced.to_string())],
+                );
+            }
+            if skipped > 0 {
+                let skipped_msg = i18n::t(self.lang, Key::SkippedReadOnly);
+                self.status = format!("{}: {}", self.status, skipped_msg);
+            }
+        } else {
+            let mut records: Vec<EditRecord> = Vec::new();
+            // Process bottom-to-top so earlier offsets stay valid.
+            for m in matches.iter().rev() {
+                if let Ok(delete_rec) =
+                    self.doc_mut()
+                        .delete_range(m.line, m.start_col, m.line, m.end_col)
+                {
+                    if let Ok(insert_rec) = self.doc_mut().insert(m.line, m.start_col, &replacement)
+                    {
+                        records.push(delete_rec);
+                        records.push(insert_rec);
+                    } else {
+                        // If insert fails, undo the delete for this match.
+                        let _ = self.doc_mut().apply(&delete_rec.inverse());
+                    }
                 }
             }
-        }
-        if !records.is_empty() {
-            self.record_edits(records, false);
-            self.status = i18n::tr(
-                self.lang,
-                Key::ReplacedCount,
-                &[("count", &count.to_string())],
-            );
+            if !records.is_empty() {
+                self.record_edits(records, false);
+                self.status = i18n::tr(
+                    self.lang,
+                    Key::ReplacedCount,
+                    &[("count", &count.to_string())],
+                );
+            }
         }
         // Clear the search state since all matches are replaced.
         self.search = None;
@@ -1122,52 +1264,70 @@ impl App {
     }
 
     /// Move cursor to the start of match `idx` and scroll into view.
+    /// For cross-doc searches, switches tabs when the match is in a
+    /// different document than the active one.
     fn goto_match(&mut self, idx: usize) {
         let Some(search) = &self.search else {
             return;
         };
         let m = search.matches[idx];
+        if search.cross_doc && m.doc_index != self.active {
+            self.switch_to(m.doc_index);
+        }
         self.cursor_line = m.line;
         self.cursor_col = m.start_col;
         self.clamp_cursor();
         self.clamp_scroll();
     }
 
-    /// Find all single-line matches of `query` in the active document.
+    /// Find all single-line matches of `query`.
+    /// When the active search is cross-doc, searches every open
+    /// document in tab order; otherwise searches only the active doc.
     /// Returns char-offset positions; empty query returns no matches.
     fn find_matches(&self, query: &str) -> Vec<MatchPos> {
         if query.is_empty() {
             return vec![];
         }
         let case_sensitive = self.search_options.case_sensitive;
+        let cross_doc = self.search.as_ref().is_some_and(|s| s.cross_doc);
         let mut results = Vec::new();
-        for line_idx in 0..self.doc().line_count() {
-            let line = self.doc().line(line_idx);
-            if case_sensitive {
-                let mut start = 0;
-                while let Some(pos) = line[start..].find(query) {
-                    let byte_start = start + pos;
-                    let byte_end = byte_start + query.len();
-                    results.push(MatchPos {
-                        line: line_idx,
-                        start_col: line[..byte_start].chars().count(),
-                        end_col: line[..byte_end].chars().count(),
-                    });
-                    start = byte_end;
-                }
-            } else {
-                let line_lower = line.to_lowercase();
-                let query_lower = query.to_lowercase();
-                let mut start = 0;
-                while let Some(pos) = line_lower[start..].find(&query_lower) {
-                    let byte_start = start + pos;
-                    let byte_end = byte_start + query_lower.len();
-                    results.push(MatchPos {
-                        line: line_idx,
-                        start_col: line[..byte_start].chars().count(),
-                        end_col: line[..byte_end].chars().count(),
-                    });
-                    start = byte_end;
+        let doc_indices: Vec<usize> = if cross_doc {
+            (0..self.docs.len()).collect()
+        } else {
+            vec![self.active]
+        };
+        for doc_idx in doc_indices {
+            let doc = &self.docs[doc_idx];
+            for line_idx in 0..doc.line_count() {
+                let line = doc.line(line_idx);
+                if case_sensitive {
+                    let mut start = 0;
+                    while let Some(pos) = line[start..].find(query) {
+                        let byte_start = start + pos;
+                        let byte_end = byte_start + query.len();
+                        results.push(MatchPos {
+                            line: line_idx,
+                            start_col: line[..byte_start].chars().count(),
+                            end_col: line[..byte_end].chars().count(),
+                            doc_index: doc_idx,
+                        });
+                        start = byte_end;
+                    }
+                } else {
+                    let line_lower = line.to_lowercase();
+                    let query_lower = query.to_lowercase();
+                    let mut start = 0;
+                    while let Some(pos) = line_lower[start..].find(&query_lower) {
+                        let byte_start = start + pos;
+                        let byte_end = byte_start + query_lower.len();
+                        results.push(MatchPos {
+                            line: line_idx,
+                            start_col: line[..byte_start].chars().count(),
+                            end_col: line[..byte_end].chars().count(),
+                            doc_index: doc_idx,
+                        });
+                        start = byte_end;
+                    }
                 }
             }
         }
@@ -1511,14 +1671,27 @@ impl App {
                 }
             } else {
                 let current = search.current_idx.map_or(0, |i| i + 1);
-                i18n::tr(
-                    self.lang,
-                    Key::MatchCounter,
-                    &[
-                        ("current", &current.to_string()),
-                        ("total", &search.matches.len().to_string()),
-                    ],
-                )
+                if search.cross_doc {
+                    let doc_title = self.doc_title(search.matches[current].doc_index);
+                    i18n::tr(
+                        self.lang,
+                        Key::MatchCounterCross,
+                        &[
+                            ("current", &current.to_string()),
+                            ("total", &search.matches.len().to_string()),
+                            ("doc", &doc_title),
+                        ],
+                    )
+                } else {
+                    i18n::tr(
+                        self.lang,
+                        Key::MatchCounter,
+                        &[
+                            ("current", &current.to_string()),
+                            ("total", &search.matches.len().to_string()),
+                        ],
+                    )
+                }
             };
             let hints = if is_replace {
                 format!(
@@ -1657,13 +1830,24 @@ impl App {
         }
         if self.confirm.is_some() {
             let prompt = match self.confirm {
-                Some(ConfirmKind::ReplaceAll(count)) => {
+                Some(ConfirmKind::ReplaceAll(count, doc_count)) => {
                     let title = i18n::t(self.lang, Key::ReplaceConfirmTitle);
-                    let msg = i18n::tr(
-                        self.lang,
-                        Key::ReplaceConfirmMessage,
-                        &[("count", &count.to_string())],
-                    );
+                    let msg = if doc_count <= 1 {
+                        i18n::tr(
+                            self.lang,
+                            Key::ReplaceConfirmMessage,
+                            &[("count", &count.to_string())],
+                        )
+                    } else {
+                        i18n::tr(
+                            self.lang,
+                            Key::ReplaceConfirmMessageCross,
+                            &[
+                                ("count", &count.to_string()),
+                                ("docs", &doc_count.to_string()),
+                            ],
+                        )
+                    };
                     format!("{title} {msg}")
                 }
                 _ => i18n::t(self.lang, Key::SaveChangesPrompt).to_string(),
@@ -1731,6 +1915,10 @@ mod tests {
 
     fn shift(code: KeyCode) -> KeyEvent {
         press(code, KeyModifiers::SHIFT)
+    }
+
+    fn ctrl_shift(code: KeyCode) -> KeyEvent {
+        press(code, KeyModifiers::CONTROL | KeyModifiers::SHIFT)
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -3141,6 +3329,7 @@ mod tests {
             line: 0,
             start_col: 6,
             end_col: 10,
+            doc_index: 0,
         }];
         let plain_span = Span::styled(line_text.to_string(), Style::default());
         let plain_span = Span::styled(line_text.to_string(), Style::default());
@@ -3216,6 +3405,7 @@ mod tests {
             line: 0,
             start_col: 0,
             end_col: 2,
+            doc_index: 0,
         }];
         let spans = App::compose_highlight_spans(
             line_text,
@@ -3472,5 +3662,344 @@ mod tests {
         let doc = app.doc();
         assert!(doc.line(0).contains("HI"));
         let _ = dir;
+    }
+
+    // Task 3: Ctrl+Shift+F opens cross-doc find dialog.
+    #[test]
+    fn ctrl_shift_f_opens_cross_doc_find() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('f')));
+        assert!(app.search.is_some());
+        assert!(app.search.as_ref().unwrap().cross_doc);
+        assert_eq!(app.search.as_ref().unwrap().start_doc, 0);
+    }
+
+    // Task 3: Cross-doc navigation switches active tab.
+    #[test]
+    fn cross_doc_navigation_switches_tabs() {
+        let dir = temp_dir("cross_doc_nav");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello world").expect("pre-create");
+        std::fs::write(&path2, "hello there").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        assert_eq!(app.active, 0);
+        app.on_key(ctrl_shift(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        // First match is in doc 0 (active). Press Enter to go to next match.
+        app.on_key(plain(KeyCode::Enter));
+        // Second match is in doc 1 — navigation should switch tabs.
+        assert_eq!(app.active, 1);
+        let _ = dir;
+    }
+
+    // Task 3: Cross-doc wrap-around.
+    #[test]
+    fn cross_doc_navigation_wraps_around() {
+        let dir = temp_dir("cross_doc_wrap");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello").expect("pre-create");
+        std::fs::write(&path2, "hello").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        // 2 matches total, one per doc. Navigate past the last match.
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.active, 1);
+        app.on_key(plain(KeyCode::Enter));
+        // Should wrap back to doc 0.
+        assert_eq!(app.active, 0);
+        let _ = dir;
+    }
+
+    // Task 3: Esc restores starting doc for cross-doc if un-navigated.
+    #[test]
+    fn cross_doc_esc_restores_starting_doc_when_unnavigated() {
+        let dir = temp_dir("cross_doc_esc");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello\nworld\nfoo\nbar\nbaz").expect("pre-create");
+        std::fs::write(&path2, "world").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        app.cursor_line = 3;
+        app.cursor_col = 1;
+        app.on_key(ctrl_shift(KeyCode::Char('f')));
+        // Don't navigate — just close with Esc.
+        app.on_key(plain(KeyCode::Esc));
+        // Should be back on doc 0 with cursor restored.
+        assert_eq!(app.active, 0);
+        assert_eq!(app.cursor_line, 3);
+        assert_eq!(app.cursor_col, 1);
+        let _ = dir;
+    }
+
+    // Task 3: Esc does NOT restore starting doc when navigation happened.
+    #[test]
+    fn cross_doc_esc_does_not_restore_when_navigated() {
+        let dir = temp_dir("cross_doc_esc_nav");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello").expect("pre-create");
+        std::fs::write(&path2, "hello").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('f')));
+        typed(&mut app, "hello");
+        // Navigate to a match (switches to doc 1).
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.active, 1);
+        // Now Esc — should NOT restore doc 0 cursor because we navigated.
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.search.is_none());
+        // We should still be on doc 1 (not restored to doc 0).
+        assert_eq!(app.active, 1);
+        let _ = dir;
+    }
+
+    // Task 4: Ctrl+Shift+H opens cross-doc replace dialog.
+    #[test]
+    fn ctrl_shift_h_opens_cross_doc_replace() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('h')));
+        assert!(app.search.is_some());
+        assert!(app.search.as_ref().unwrap().cross_doc);
+        assert_eq!(app.search.as_ref().unwrap().mode, SearchMode::Replace);
+    }
+
+    // Task 4: Cross-doc replace-current-and-advance switches tabs.
+    #[test]
+    fn cross_doc_replace_current_advances_and_switches_tabs() {
+        let dir = temp_dir("cross_doc_replace_current");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello world").expect("pre-create");
+        std::fs::write(&path2, "hello there").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('h')));
+        typed(&mut app, "hello");
+        // Switch to replacement field and type replacement.
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "HI");
+        // Ctrl+Enter replaces current match and advances.
+        app.on_key(ctrl(KeyCode::Enter));
+        // First match was in doc 0, replaced. Next match is in doc 1.
+        assert_eq!(app.active, 1);
+        // Replacements are in-memory until an explicit save.
+        let doc1: String = (0..app.docs[0].line_count())
+            .map(|i| app.docs[0].line(i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(doc1.contains("HI world"));
+        let _ = dir;
+    }
+
+    // Task 4: Cross-doc replace-all with confirm updates all docs.
+    #[test]
+    fn cross_doc_replace_all_confirms_and_replaces_in_all_docs() {
+        let dir = temp_dir("cross_doc_replace_all");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello hello").expect("pre-create");
+        std::fs::write(&path2, "hello world hello").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('h')));
+        typed(&mut app, "hello");
+        // Switch to replacement field.
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "HI");
+        // F6 requests replace-all confirmation.
+        app.on_key(plain(KeyCode::F(6)));
+        assert!(app.confirm.is_some());
+        // Confirm with Y.
+        app.on_key(plain(KeyCode::Char('y')));
+        // Both docs should have replacements in memory (save is explicit).
+        let doc_text = |i: usize| -> String {
+            (0..app.docs[i].line_count())
+                .map(|l| app.docs[i].line(l))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let doc1 = doc_text(0);
+        let doc2 = doc_text(1);
+        assert!(doc1.contains("HI HI"));
+        assert!(doc2.contains("HI world HI"));
+        assert!(!doc1.contains("hello"));
+        assert!(!doc2.contains("hello"));
+        let _ = dir;
+    }
+
+    // Task 4: Per-doc undo restores each doc independently.
+    #[test]
+    fn cross_doc_replace_all_per_doc_undo_restores() {
+        let dir = temp_dir("cross_doc_undo");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello hello").expect("pre-create");
+        std::fs::write(&path2, "hello world hello").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('h')));
+        typed(&mut app, "hello");
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "HI");
+        app.on_key(plain(KeyCode::F(6)));
+        app.on_key(plain(KeyCode::Char('y')));
+        // Undo should restore doc 0 (current active doc after replace-all).
+        // Assert in-memory: the file was never saved (explicit-save design).
+        app.on_key(ctrl(KeyCode::Char('z')));
+        let doc1: String = (0..app.docs[0].line_count())
+            .map(|i| app.docs[0].line(i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(doc1.contains("hello hello"));
+        assert!(!doc1.contains("HI"));
+        let _ = dir;
+    }
+
+    // Task 4: Read-only docs are skipped in cross-doc replace-all.
+    #[test]
+    fn cross_doc_replace_all_skips_read_only_docs() {
+        let dir = temp_dir("cross_doc_skip_readonly");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello hello").expect("pre-create");
+        std::fs::write(&path2, "hello world hello").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        // Mark doc 1 as read-only.
+        app.docs[1].set_read_only();
+        app.on_key(ctrl_shift(KeyCode::Char('h')));
+        typed(&mut app, "hello");
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "HI");
+        app.on_key(plain(KeyCode::F(6)));
+        app.on_key(plain(KeyCode::Char('y')));
+        // Doc 0 should be replaced, doc 1 (read-only) should be untouched.
+        // Assert in-memory (replacements apply to buffers, not files).
+        let doc_text = |i: usize| -> String {
+            (0..app.docs[i].line_count())
+                .map(|l| app.docs[i].line(l))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let doc1 = doc_text(0);
+        let doc2 = doc_text(1);
+        assert!(doc1.contains("HI HI"));
+        assert!(doc2.contains("hello"));
+        let _ = dir;
+    }
+
+    // Task 4: Docs with zero matches are untouched in cross-doc replace-all.
+    #[test]
+    fn cross_doc_replace_all_leaves_zero_match_docs_untouched() {
+        let dir = temp_dir("cross_doc_zero_match");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "hello hello").expect("pre-create");
+        std::fs::write(&path2, "no match here").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('h')));
+        typed(&mut app, "hello");
+        app.on_key(plain(KeyCode::Tab));
+        typed(&mut app, "HI");
+        app.on_key(plain(KeyCode::F(6)));
+        app.on_key(plain(KeyCode::Char('y')));
+        let doc2 = std::fs::read_to_string(&path2).expect("read");
+        assert_eq!(doc2.trim(), "no match here");
+        let _ = dir;
+    }
+
+    // Task 3+4: Uppercase query works in cross-doc search.
+    #[test]
+    fn uppercase_query_works_in_cross_doc_search() {
+        let dir = temp_dir("uppercase_cross_doc");
+        let path1 = dir.join("doc1.txt");
+        let path2 = dir.join("doc2.txt");
+        std::fs::write(&path1, "Hello World").expect("pre-create");
+        std::fs::write(&path2, "HELLO THERE").expect("pre-create");
+        let mut app = App::new(
+            vec![
+                Document::from_path(&path1).expect("load1"),
+                Document::from_path(&path2).expect("load2"),
+            ],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('f')));
+        typed(&mut app, "HELLO");
+        // Case-insensitive by default, so both docs should have matches.
+        let search = app.search.as_ref().unwrap();
+        assert!(search.matches.len() >= 2);
+        let _ = dir;
+    }
+
+    // Task 3+4: Empty query is a no-op in cross-doc search.
+    #[test]
+    fn empty_query_no_op_in_cross_doc_search() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        app.on_key(ctrl_shift(KeyCode::Char('f')));
+        // Empty query — no matches.
+        let search = app.search.as_ref().unwrap();
+        assert!(search.matches.is_empty());
     }
 }

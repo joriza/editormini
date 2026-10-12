@@ -114,6 +114,12 @@ pub enum Key {
     ReplacedCount,
     /// Status when no matches exist for replace.
     NoMatchesReplace,
+    /// Replace-all confirmation for cross-doc: "Replace {count} occurrence(s) in {docs} documents?"
+    ReplaceConfirmMessageCross,
+    /// Match counter for cross-doc: "{current}/{total} ({doc})".
+    MatchCounterCross,
+    /// Status suffix for skipped read-only docs in cross-doc replace-all.
+    SkippedReadOnly,
 }
 
 /// Translate `key` for `lang`.
@@ -224,6 +230,19 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::ReplacedCount) => "Reemplazado(s) {count}",
         (Lang::En, Key::NoMatchesReplace) => "No matches to replace",
         (Lang::Es, Key::NoMatchesReplace) => "Sin coincidencias para reemplazar",
+        // Cross-doc replace-all confirm message.
+        (Lang::En, Key::ReplaceConfirmMessageCross) => {
+            "Replace {count} occurrence(s) in {docs} documents?"
+        }
+        (Lang::Es, Key::ReplaceConfirmMessageCross) => {
+            "¿Reemplazar {count} ocurrencia(s) en {docs} documentos?"
+        }
+        // Cross-doc match counter showing doc title.
+        (Lang::En, Key::MatchCounterCross) => "{current}/{total} ({doc})",
+        (Lang::Es, Key::MatchCounterCross) => "{current}/{total} ({doc})",
+        // Status suffix for read-only docs skipped in cross-doc replace-all.
+        (Lang::En, Key::SkippedReadOnly) => "read-only doc(s) skipped",
+        (Lang::Es, Key::SkippedReadOnly) => "documento(s) solo lectura omitido(s)",
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg
@@ -290,6 +309,9 @@ mod tests {
         Key::ReplaceFieldReplacement,
         Key::ReplaceConfirmTitle,
         Key::ReplaceConfirmMessage,
+        Key::ReplaceConfirmMessageCross,
+        Key::MatchCounterCross,
+        Key::SkippedReadOnly,
     ];
 
     #[test]
