@@ -353,7 +353,6 @@ impl App {
 
     /// Perform an insert and return its record without touching history.
     fn do_insert(&mut self, text: &str) -> Option<EditRecord> {
-        self.status.clear();
         let (line, col) = (self.cursor_line, self.cursor_col);
         match self.doc_mut().insert(line, col, text) {
             Ok(record) => {
@@ -391,7 +390,6 @@ impl App {
     /// the cursor is replaced instead of shifting text right; the replacement
     /// (delete + insert) is ONE undo step per keystroke.
     fn type_char(&mut self, c: char) {
-        self.status.clear();
         let mut records: Vec<EditRecord> = Vec::new();
         let overwrite_replaced =
             self.overwrite && self.cursor_col < self.doc().line_len(self.cursor_line);
@@ -419,7 +417,6 @@ impl App {
     }
 
     fn backspace(&mut self) {
-        self.status.clear();
         let (line, col) = (self.cursor_line, self.cursor_col);
         let result = if col > 0 {
             self.doc_mut().delete_range(line, col - 1, line, col)
@@ -440,7 +437,6 @@ impl App {
     }
 
     fn delete_forward(&mut self) {
-        self.status.clear();
         let (line, col) = (self.cursor_line, self.cursor_col);
         let result = if col < self.doc().line_len(line) {
             self.doc_mut().delete_range(line, col, line, col + 1)
@@ -2014,14 +2010,13 @@ mod tests {
             "untitled save must not lose changes"
         );
         assert!(
-            app.status.is_empty(),
-            "prompt replaces the status, got: {}",
-            app.status
+            !app.status.is_empty(),
+            "the prompt bar replaces the status only while it is open"
         );
     }
 
     #[test]
-    fn status_persists_until_next_edit_action() {
+    fn status_persists_until_replaced_by_a_new_message() {
         let dir = temp_dir("status");
         let path = dir.join("status.txt");
         let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
@@ -2032,10 +2027,23 @@ mod tests {
         // Cursor movement keeps the message visible...
         app.on_key(plain(KeyCode::Left));
         assert_eq!(app.status, saved);
-        // ...but the next edit action clears it.
+        // ...and so does editing: messages are only replaced, never cleared
+        // (owner: the startup hints must not vanish with the first keystroke).
         app.on_key(plain(KeyCode::Char('x')));
-        assert!(app.status.is_empty());
+        assert_eq!(app.status, saved);
+        // A new message (overwrite toggle) replaces the old one.
+        app.on_key(plain(KeyCode::Insert));
+        assert_eq!(app.status, "Overwrite ON");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn typing_keeps_the_last_status_message_visible() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::Es);
+        let hints = app.status.clone();
+        assert!(hints.contains("guardar"), "status: {}", hints);
+        typed(&mut app, "hola");
+        assert_eq!(app.status, hints, "typing must not clear the status");
     }
 
     #[test]
