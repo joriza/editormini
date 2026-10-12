@@ -50,6 +50,8 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | Clic izquierdo en una pestaña | cambiar al documento de esa pestaña |
 | Rueda del ratón (arriba/abajo) | desplazar la vista (mismo rango que PgUp/PgDn) |
 
+> La barra de estado inferior muestra, a la derecha, el lenguaje del documento y la **versión de compilación** (p. ej. `v0.1.0·1012-1830`, sello UTC `MMDD-HHMM` que cambia en cada build): referencia rápida para saber qué ejecutable estás probando.
+
 ## Configuración
 
 `editormini.json` junto al ejecutable (portable-first; en desarrollo queda en `target/debug/`). Si no existe, se usan los valores por defecto; si está mal formado, el editor avisa y corta:

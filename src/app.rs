@@ -1800,7 +1800,14 @@ impl App {
         let ext = highlight::extension_of(doc.path());
         let language = highlight::language_name(ext.as_deref())
             .unwrap_or_else(|| i18n::t(self.lang, Key::PlainText));
-        let right = format!(" {language} {}", self.status);
+        // Build stamp (UTC MMDD-HHMM from build.rs) + package version, so a
+        // tester can tell at a glance which build is on screen.
+        let build_id = option_env!("EDITORMINI_BUILD_ID").unwrap_or("dev");
+        let right = format!(
+            " {language} v{}·{build_id} {}",
+            env!("CARGO_PKG_VERSION"),
+            self.status
+        );
         // Truncate left with ellipsis when total content exceeds width.
         let right_len = right.chars().count();
         let available = width.saturating_sub(right_len);
@@ -3475,6 +3482,23 @@ mod tests {
             );
         }
         let _ = dir;
+    }
+
+    // Status bar must expose the package version and the build stamp so the
+    // owner can tell at a glance which build is under manual test.
+    #[test]
+    fn status_bar_shows_version_and_build_id() {
+        let app = App::new(vec![Document::new_untitled()], Lang::En);
+        let (_, right) = app.status_line(80);
+        let marker = format!(
+            "v{}·{}",
+            env!("CARGO_PKG_VERSION"),
+            option_env!("EDITORMINI_BUILD_ID").unwrap_or("dev")
+        );
+        assert!(
+            right.contains(&marker),
+            "status right side must contain version marker {marker:?}, got {right:?}"
+        );
     }
 
     // R3-005: Ctrl+H opens the replace dialog.
