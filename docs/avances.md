@@ -5,7 +5,7 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 ## Estado actual
 
 - **Hito 1**: 8 de 11 tareas completadas (1, 2, 4, 5, 7, 9, 10 y 11; la 3 —deshacer— se reordenó después de la 5 a pedido del dueño para tener algo probable antes).
-- **Verificación**: 106/106 tests, build con 0 warnings.
+- **Verificación**: 114/114 tests (106 originales + 8 nuevos de gutter), build con 0 warnings.
 - **Ronda de hardening (task 9 mouse)**: refactor de `tab_layout` helper compartido entre render y hit-testing, test de `col_off` no nulo, y tests de rueda de scroll con distancia exacta.
 - **Verificado por el dueño**: escritura correcta, guardado, prompt de salida, `●` de modificado en pestañas.
 
@@ -22,6 +22,7 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 | 2026-10-12 | — | Tarea 7 — i18n completo: auditoría de rutas de error (IoError/NotUtf8/OutOfBounds/ReadOnly), corrección de 3 `format!("{e}")` sin traducir en undo/redo/do_insert, corrección de `read-only` hardcodeado, traslado de `ALL_KEYS` al módulo de tests para eliminar warning, 3 tests con assertions rotas por migración i18n corregidas | 78 tests; build 0 warnings |
 | 2026-10-12 | — | Tarea 9 — Mouse básico: clic para colocar cursor (con mapeo pantalla→buffer que respeta scroll_top y offset), clic en pestaña para cambiar documento, rueda de scroll (ScrollUp/ScrollDown con mismos límites que PgUp/PgDn), clic derecho ignorado; eventos de mouse enrutados por `App::on_mouse` para tests determinísticos | 91 tests; build 0 warnings |
 | 2026-10-12 | — | Tarea 10 — Status bar: filename ●, Ln:col, modified ●, overwrite OVR, read-only [RO], language indicator (Rust/Markdown/Plain text), ellipsis truncation on narrow terminals, theme-styled; i18n key PlainText added; 13 new tests | 106 tests; build 0 warnings |
+| 2026-10-12 | — | Gutter de números de línea: columna fija derecha-alineada (dígitos de la última línea visible + 1 espacio), estilo dim para números y énfasis en la línea del cursor, fila en blanco para líneas pasadas de EOF, helper `gutter_width` compartido entre render y mouse-mapping, mapeo de clic corregido restando gutter_width, cursor screen col = gutter_w + buf_col - col_off; 8 tests nuevos | 114 tests; build 0 warnings |
 | 2026-10-12 | — | Tarea 11 — Release portable: crt-static via `.cargo/config.toml`. VCRUNTIME140.dll eliminada. Antes: 3 353 088 bytes + 1 dep VC redist. Después: 3 455 488 bytes (~+102 KB), 0 deps runtime (solo DLLs de sistema Windows). Build release + test release 0 warnings; 106/106 tests verdes. | — |
 
 ## Reordenamientos decididos

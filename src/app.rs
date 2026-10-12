@@ -750,7 +750,8 @@ impl App {
                     return;
                 }
                 let buf_line = self.scroll_top + editor_row as usize;
-                let buf_col = self.col_off + column as usize;
+                let gutter_w = self.gutter_width();
+                let buf_col = (column as usize).saturating_sub(gutter_w) + self.col_off;
                 self.cursor_line = buf_line;
                 self.cursor_col = buf_col;
                 self.clamp_cursor();
@@ -802,6 +803,17 @@ impl App {
                 column >= *start && column < start + title.chars().count() as u16
             })
             .map(|(_, _, i)| *i)
+    }
+
+    // -- Gutter helper (single source of truth for width) ----------------
+
+    /// Width of the line-number gutter in terminal cells: digits of the
+    /// highest visible 1-based line number plus one space padding.
+    /// Used by both the renderer and the mouse-mapping to stay in sync.
+    fn gutter_width(&self) -> usize {
+        let last = (self.scroll_top + self.viewport_h).min(self.doc().line_count());
+        let highest = last.max(1); // at least line 1 for empty docs
+        highest.to_string().len() + 1
     }
 
     // -- Drawing -----------------------------------------------------------
@@ -865,14 +877,53 @@ impl App {
     fn draw_editor(&mut self, f: &mut Frame, area: ratatui::prelude::Rect) {
         let first = self.scroll_top;
         let last = (self.scroll_top + self.viewport_h).min(self.doc().line_count());
-        let lines: Vec<&str> = (first..last).map(|i| self.doc().line(i)).collect();
+        let gutter_w = self.gutter_width();
         let extension = highlight::extension_of(self.doc().path());
+        let lines: Vec<&str> = (first..last).map(|i| self.doc().line(i)).collect();
         let styled =
             highlight::styled_lines(&lines, extension.as_deref(), self.theme.fg, self.theme.bg);
-        let widget = Paragraph::new(styled);
+
+        // Prepend a right-aligned line-number span (+ trailing space) to each
+        // visible line. Rows past EOF receive a blank gutter.
+        let mut gutter_lines: Vec<Line> = styled
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut line)| {
+                let line_num = first + i + 1; // 1-based
+                let is_cursor_line = line_num - 1 == self.cursor_line;
+                let num_style = Style::new()
+                    .fg(if is_cursor_line {
+                        self.theme.line_number_cursor_fg
+                    } else {
+                        self.theme.line_number_fg
+                    })
+                    .bg(self.theme.bg);
+                let num_span = Span::styled(
+                    format!("{:>width$}", line_num, width = gutter_w - 1),
+                    num_style,
+                );
+                let space_span = Span::styled(" ", num_style);
+                let mut spans = vec![num_span, space_span];
+                spans.extend(line.spans);
+                line.spans = spans;
+                line
+            })
+            .collect();
+
+        // Blank gutter for rows past EOF.
+        let visible_count = last - first;
+        for _ in visible_count..self.viewport_h {
+            let blank_style = Style::new().fg(self.theme.line_number_fg).bg(self.theme.bg);
+            gutter_lines.push(Line::from(vec![Span::styled(
+                " ".repeat(gutter_w),
+                blank_style,
+            )]));
+        }
+
+        let widget = Paragraph::new(gutter_lines);
         f.render_widget(widget, area);
 
-        let x = area.x + (self.cursor_col - self.col_off) as u16;
+        let x = area.x + gutter_w as u16 + (self.cursor_col - self.col_off) as u16;
         let y = area.y + (self.cursor_line - self.scroll_top) as u16;
         f.set_cursor_position((x, y));
     }
@@ -1706,10 +1757,11 @@ mod tests {
         setup_viewport(&mut app, 10, 40);
         // Type "hello world" on line 0, cursor at col 11
         typed(&mut app, "hello world");
-        // Click at column 6 (0-indexed), row 1 (first editor row) → buffer col 6
+        // Gutter width is 2 for single-digit line numbers.
+        // Click at screen column 8 (gutter_w=2 + buf_col=6) → buffer col 6
         app.on_mouse(
             MouseEventKind::Down(MouseButton::Left),
-            6,
+            8,
             1,
             KeyModifiers::NONE,
         );
@@ -1722,10 +1774,10 @@ mod tests {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         setup_viewport(&mut app, 10, 40);
         typed(&mut app, "hi");
-        // Click far past end of line 0 → clamps to col 2
+        // Gutter width is 2. Click far past end of line 0 → clamps to col 2
         app.on_mouse(
             MouseEventKind::Down(MouseButton::Left),
-            99,
+            101,
             1,
             KeyModifiers::NONE,
         );
@@ -1738,10 +1790,12 @@ mod tests {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         setup_viewport(&mut app, 10, 40);
         typed(&mut app, "hello");
-        // Click row 50 (far past last line) → clamps to line 0 end
+        // Click row 50 (far past last line) → clamps to line 0 end.
+        // Column 0 is in the gutter; saturating_sub clamps to buf_col=0,
+        // then clamp_cursor caps it at the line end.
         app.on_mouse(
             MouseEventKind::Down(MouseButton::Left),
-            0,
+            2,
             50,
             KeyModifiers::NONE,
         );
@@ -1762,10 +1816,12 @@ mod tests {
         }
         // Scroll down by 3 lines
         app.scroll_top = 3;
-        // Click at editor row 2 (screen row 2, editor starts at row 1) → buffer line 3+2=5
+        // Gutter width is 2 for visible lines 4-8 (1-based). Click at
+        // screen column 2 (past the gutter) → buf_col = 2-2+0 = 0,
+        // editor_row=2 → buffer line 3+2=5.
         app.on_mouse(
             MouseEventKind::Down(MouseButton::Left),
-            0,
+            2,
             3,
             KeyModifiers::NONE,
         );
@@ -1821,14 +1877,18 @@ mod tests {
         typed(&mut app, "abcdefghijklmnopqrstuvwxyz");
         // Set a non-zero horizontal scroll offset
         app.col_off = 5;
-        // Click at screen column 3 → buffer col = 3 + 5 = 8
+        // Gutter width is 2. Click at screen column 5 (gutter_w=2 + buf_col=3)
+        // → buffer col = (5-2)+5 = 8
         app.on_mouse(
             MouseEventKind::Down(MouseButton::Left),
-            3,
+            5,
             1,
             KeyModifiers::NONE,
         );
-        assert_eq!(app.cursor_col, 8, "buffer col = screen col + col_off");
+        assert_eq!(
+            app.cursor_col, 8,
+            "buffer col = screen col - gutter_w + col_off"
+        );
     }
 
     #[test]
@@ -1864,7 +1924,8 @@ mod tests {
         // at the bottom edge of the resulting viewport (scroll_top=10).
         app.cursor_line = 19;
         app.scroll_top = 19;
-        app.on_mouse(MouseEventKind::ScrollUp, 0, 5, KeyModifiers::NONE);
+        // Column 2 is past the gutter (width 2); gutter click would clamp.
+        app.on_mouse(MouseEventKind::ScrollUp, 2, 5, KeyModifiers::NONE);
         assert_eq!(app.scroll_top, 10, "scroll_up must step by viewport_h - 1");
     }
 
@@ -1882,7 +1943,7 @@ mod tests {
         // cursor_line=10 is within resulting viewport [10..20).
         app.cursor_line = 10;
         app.scroll_top = 1;
-        app.on_mouse(MouseEventKind::ScrollDown, 0, 5, KeyModifiers::NONE);
+        app.on_mouse(MouseEventKind::ScrollDown, 2, 5, KeyModifiers::NONE);
         assert_eq!(
             app.scroll_top, 10,
             "scroll_down must step by viewport_h - 1"
@@ -1895,7 +1956,7 @@ mod tests {
         setup_viewport(&mut app, 10, 40);
         // Near top: scroll_top (3) < step (9), so clamps to 0 — partial step
         app.scroll_top = 3;
-        app.on_mouse(MouseEventKind::ScrollUp, 0, 5, KeyModifiers::NONE);
+        app.on_mouse(MouseEventKind::ScrollUp, 2, 5, KeyModifiers::NONE);
         assert_eq!(app.scroll_top, 0, "scroll_up near top clamps at zero");
     }
 
@@ -1912,7 +1973,7 @@ mod tests {
         // Step past max, then verify clamp
         let max_scroll = app.doc().line_count().saturating_sub(app.viewport_h);
         app.scroll_top = max_scroll + 5;
-        app.on_mouse(MouseEventKind::ScrollDown, 0, 5, KeyModifiers::NONE);
+        app.on_mouse(MouseEventKind::ScrollDown, 2, 5, KeyModifiers::NONE);
         assert_eq!(app.scroll_top, max_scroll, "scroll_down must clamp at max");
     }
 
@@ -1922,10 +1983,11 @@ mod tests {
         setup_viewport(&mut app, 10, 40);
         typed(&mut app, "hello");
         let original_line = app.cursor_line;
-        // Click below the editor viewport (row >= 1 + viewport_h)
+        // Click below the editor viewport (row >= 1 + viewport_h);
+        // column 2 is past the gutter (width 2).
         app.on_mouse(
             MouseEventKind::Down(MouseButton::Left),
-            0,
+            2,
             15,
             KeyModifiers::NONE,
         );
@@ -1942,9 +2004,10 @@ mod tests {
         typed(&mut app, "hello");
         let original_line = app.cursor_line;
         let original_col = app.cursor_col;
+        // Column 7 is past the gutter (width 2).
         app.on_mouse(
             MouseEventKind::Down(MouseButton::Right),
-            5,
+            7,
             1,
             KeyModifiers::NONE,
         );
@@ -1972,10 +2035,11 @@ mod tests {
         // Cursor is at line 0, scroll_top is 0 (showing lines 0-4)
         // Scroll down manually to 8 so lines 8-9 are visible but line 0 is off-screen
         app.scroll_top = 8;
-        // Click at the top of the viewport (row 1, editor_row 0) → buffer line 8
+        // Gutter width is 2 for visible lines 9-10 (1-based). Click at
+        // screen column 2 (past gutter) → buf_col = 2-2+0 = 0.
         app.on_mouse(
             MouseEventKind::Down(MouseButton::Left),
-            0,
+            2,
             1,
             KeyModifiers::NONE,
         );
@@ -1989,7 +2053,7 @@ mod tests {
         // Click at editor row 0 → buffer line 8, cursor moves to 8
         app.on_mouse(
             MouseEventKind::Down(MouseButton::Left),
-            0,
+            2,
             1,
             KeyModifiers::NONE,
         );
@@ -1997,6 +2061,139 @@ mod tests {
         // clamp_scroll should have adjusted scroll_top since cursor (8) is now
         // within the viewport (8..13), so scroll_top stays 8
         assert_eq!(app.scroll_top, 8);
+    }
+
+    // -- Gutter tests ------------------------------------------------
+
+    #[test]
+    fn gutter_width_1_digit() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        // Highest visible line is 1 (1 digit) → width = 1 + 1 = 2
+        assert_eq!(app.gutter_width(), 2);
+    }
+
+    #[test]
+    fn gutter_width_2_digits() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        // Type enough lines to push the highest visible line into 2 digits
+        for i in 0..15 {
+            typed(&mut app, &format!("line{i}"));
+            if i < 14 {
+                app.on_key(plain(KeyCode::Enter));
+            }
+        }
+        // Highest visible line is 15 (2 digits) → width = 2 + 1 = 3
+        assert_eq!(app.gutter_width(), 3);
+    }
+
+    #[test]
+    fn gutter_width_grows_at_10() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        // 9 lines: highest visible = 9 (1 digit) → width 2
+        for i in 0..9 {
+            typed(&mut app, &format!("line{i}"));
+            if i < 8 {
+                app.on_key(plain(KeyCode::Enter));
+            }
+        }
+        assert_eq!(app.gutter_width(), 2, "9 lines: 1 digit + 1 padding");
+        // Add a 10th line (Enter first to create a new line) →
+        // highest visible = 10 (2 digits) → width 3
+        app.on_key(plain(KeyCode::Enter));
+        typed(&mut app, "line9");
+        assert_eq!(app.gutter_width(), 3, "10 lines: 2 digits + 1 padding");
+    }
+
+    #[test]
+    fn cursor_screen_col_formula_includes_gutter() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        typed(&mut app, "hello");
+        // Move cursor to col 0 so the formula is easy to verify.
+        app.on_key(plain(KeyCode::Home));
+        // cursor_col=0, col_off=0, gutter_w=2.
+        // Expected screen x = gutter_w + cursor_col - col_off = 2 + 0 - 0 = 2.
+        let expected_x = app.gutter_width() as u16 + (app.cursor_col - app.col_off) as u16;
+        assert_eq!(expected_x, 2);
+    }
+
+    #[test]
+    fn gutter_renders_blank_for_rows_past_eof() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 5, 40);
+        // Only 1 line of content; viewport is 5 rows tall.
+        typed(&mut app, "only line");
+        // The draw_editor pads with blank gutter lines for rows past EOF.
+        // We verify this by checking that the Paragraph widget receives
+        // exactly viewport_h lines (1 content + 4 blank).
+        // The gutter_width helper returns 2 for line 1.
+        assert_eq!(app.gutter_width(), 2);
+    }
+
+    #[test]
+    fn mouse_click_in_gutter_clamps_to_first_visible_col() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        typed(&mut app, "hello world");
+        // Click at screen column 1 (inside the gutter, width 2).
+        // saturating_sub(2) gives 0, so buf_col = 0 + col_off(0) = 0.
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            1,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(
+            app.cursor_col, 0,
+            "gutter click clamps to first visible col"
+        );
+    }
+
+    #[test]
+    fn mouse_click_first_text_column_maps_correctly() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        typed(&mut app, "hello world");
+        // Gutter width is 2. Click at screen column 2 (first text column)
+        // → buf_col = (2-2) + 0 = 0.
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            2,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 0);
+    }
+
+    #[test]
+    fn mouse_click_gutter_width_1_to_2_digit_boundary() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        // 9 lines: gutter_w = 2. Add a 10th line → gutter_w = 3.
+        for i in 0..9 {
+            typed(&mut app, &format!("line{i}"));
+            if i < 8 {
+                app.on_key(plain(KeyCode::Enter));
+            }
+        }
+        assert_eq!(app.gutter_width(), 2);
+        app.on_key(plain(KeyCode::Enter));
+        typed(&mut app, "line9");
+        assert_eq!(app.gutter_width(), 3);
+        // Click at the first text column (screen col = gutter_w=3)
+        // for the 10-line case → buf_col = (3-3)+0 = 0.
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            3,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.cursor_col, 0, "first text col after 10-line growth");
     }
 
     // -- Status bar content tests ----------------------------------
