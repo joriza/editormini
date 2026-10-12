@@ -8,7 +8,7 @@
 
 ## Tasks
 
-- [ ] **1. Scaffold** — git init; cargo project `editormini`; deps (ratatui, crossterm, syntect, serde, serde_json, clap); `src/config.rs` (editormini.json: language, theme, inert `[export]` section; look beside exe, else defaults); `src/i18n.rs` catalog skeleton EN/ES (all UI strings route through it from day 1); CLI `editormini [FILE]... --lang <en|es>`; .gitignore; build passes. **Verify:** `cargo build` + config round-trip test. **Commit:** (pending)
+- [x] **1. Scaffold** — git init; cargo project `editormini`; deps (ratatui, crossterm, syntect, serde, serde_json, clap); `src/config.rs` (editormini.json: language, theme, inert `[export]` section; look beside exe, else defaults); `src/i18n.rs` catalog skeleton EN/ES (all UI strings route through it from day 1); CLI `editormini [FILE]... --lang <en|es>`; .gitignore; build passes. **Verify:** `cargo build` + config round-trip test. **Commit:** `5cbfe8d` (build 0 warnings; 5 tests pass; EN/ES smoke OK)
 - [ ] **2. Document model** — `src/document/`: line-based buffer, UTF-8, preserve BOM, preserve line endings (normalize to dominant on mixed), new files CRLF, read-only guard >10 MB, cursor pos; test-first. **Verify:** `cargo test`. **Commit:** (pending)
 - [ ] **3. Bounded undo** — per-buffer undo/redo stack, typing-burst grouping, insert/delete/replace ops; test-first. **Verify:** `cargo test`. **Commit:** (pending)
 - [ ] **4. Pane tree + editor viewport** — `src/pane.rs` PaneId/tree (single pane now; split/divider/scroll-sync fields stubbed); viewport render, cursor, scroll, movement keys (arrows/Home/End/PgUp/PgDn), editing keys; keymap table + command registry base. **Verify:** `cargo test` + **USER RUNS IT** (`cargo run -- file.txt`). **Commit:** (pending)

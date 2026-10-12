@@ -22,24 +22,54 @@ pub enum Lang {
 /// languages complete by construction.
 #[derive(Debug, Clone, Copy)]
 pub enum Key {
-    /// Scaffold notice printed until the TUI lands (milestone task 4).
-    ScaffoldNotice,
     /// Config file could not be loaded.
     ConfigLoadError,
+    /// Placeholder name for documents with no file path.
+    Untitled,
+    /// Quit confirmation shown when unsaved changes exist.
+    SaveChangesPrompt,
+    /// stdout is not a terminal (piped or redirected).
+    TerminalRequired,
+    /// Active document saved successfully.
+    Saved,
+    /// Cursor position template in the status bar.
+    LnCol,
 }
 
 /// Translate `key` for `lang`.
 pub fn t(lang: Lang, key: Key) -> &'static str {
     match (lang, key) {
-        (Lang::En, Key::ScaffoldNotice) => {
-            "editormini scaffold OK — the TUI arrives at milestone task 4."
-        }
-        (Lang::Es, Key::ScaffoldNotice) => {
-            "andamiaje de editormini listo — la TUI llega en la tarea 4 del hito."
-        }
         (Lang::En, Key::ConfigLoadError) => "Failed to load editormini.json",
         (Lang::Es, Key::ConfigLoadError) => "No se pudo cargar editormini.json",
+        (Lang::En, Key::Untitled) => "[Untitled]",
+        (Lang::Es, Key::Untitled) => "[Sin título]",
+        (Lang::En, Key::SaveChangesPrompt) => {
+            "Save changes before closing? [Y]es / [N]o / [C]ancel"
+        }
+        (Lang::Es, Key::SaveChangesPrompt) => {
+            "¿Guardar los cambios antes de cerrar? [S]í / [N]o / [C]ancelar"
+        }
+        (Lang::En, Key::TerminalRequired) => {
+            "editormini needs a real terminal (TTY). Run it inside Windows Terminal."
+        }
+        (Lang::Es, Key::TerminalRequired) => {
+            "editormini necesita una terminal real (TTY). Ejecutalo dentro de Windows Terminal."
+        }
+        (Lang::En, Key::Saved) => "Saved",
+        (Lang::Es, Key::Saved) => "Guardado",
+        (Lang::En, Key::LnCol) => "Ln {ln}, Col {col}",
+        (Lang::Es, Key::LnCol) => "Ln {ln}, Col {col}",
     }
+}
+
+/// Translate and substitute `{placeholder}` values, e.g.
+/// `tr(lang, Key::LnCol, &[("ln", "3"), ("col", "7")])`.
+pub fn tr(lang: Lang, key: Key, args: &[(&str, &str)]) -> String {
+    let mut out = t(lang, key).to_string();
+    for (name, value) in args {
+        out = out.replace(&format!("{{{name}}}"), value);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -48,7 +78,14 @@ mod tests {
 
     #[test]
     fn every_key_resolves_in_every_language() {
-        for key in [Key::ScaffoldNotice, Key::ConfigLoadError] {
+        for key in [
+            Key::ConfigLoadError,
+            Key::Untitled,
+            Key::SaveChangesPrompt,
+            Key::TerminalRequired,
+            Key::Saved,
+            Key::LnCol,
+        ] {
             for lang in [Lang::En, Lang::Es] {
                 let msg = t(lang, key);
                 assert!(!msg.is_empty(), "empty message for {lang:?}/{key:?}");
@@ -57,10 +94,22 @@ mod tests {
     }
 
     #[test]
+    fn template_substitution_fills_placeholders() {
+        let s = tr(Lang::En, Key::LnCol, &[("ln", "3"), ("col", "7")]);
+        assert_eq!(s, "Ln 3, Col 7");
+        let s = tr(Lang::Es, Key::LnCol, &[("ln", "1"), ("col", "1")]);
+        assert_eq!(s, "Ln 1, Col 1");
+    }
+
+    #[test]
+    fn save_prompt_offers_yes_in_both_languages() {
+        // Spanish uses [S]í, English uses [Y]es; the app must accept both keys.
+        assert!(t(Lang::En, Key::SaveChangesPrompt).contains("[Y]es"));
+        assert!(t(Lang::Es, Key::SaveChangesPrompt).contains("[S]í"));
+    }
+
+    #[test]
     fn languages_are_distinct() {
-        assert_ne!(
-            t(Lang::En, Key::ScaffoldNotice),
-            t(Lang::Es, Key::ScaffoldNotice)
-        );
+        assert_ne!(t(Lang::En, Key::Untitled), t(Lang::Es, Key::Untitled));
     }
 }
