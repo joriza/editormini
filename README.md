@@ -39,6 +39,9 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | `Ctrl+Z` / `Ctrl+Y` | deshacer / rehacer (historial acotado por pestaña; cada tanda de tipeo es un paso) |
 | `F3` / `Ctrl+Shift+S` | guardar todo (pestañas con ruta; omite sin título) |
 | `Ctrl+O` | abrir archivo (prompt de ruta) |
+| Clic izquierdo en el editor | colocar el cursor (se adapta al desplazamiento) |
+| Clic izquierdo en una pestaña | cambiar al documento de esa pestaña |
+| Rueda del ratón (arriba/abajo) | desplazar la vista (mismo rango que PgUp/PgDn) |
 
 ## Configuración
 

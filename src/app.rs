@@ -10,7 +10,9 @@ use std::io;
 use std::path::PathBuf;
 
 use ratatui::Frame;
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, read};
+use ratatui::crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind, read,
+};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -708,12 +710,86 @@ impl App {
     }
 
     pub fn handle_event(&mut self, event: Event) {
-        if let Event::Key(key) = event {
-            // Windows terminals deliver Press and Release; act on Press only.
-            if key.kind == KeyEventKind::Press {
-                self.on_key(key);
+        match event {
+            Event::Key(key) => {
+                // Windows terminals deliver Press and Release; act on Press only.
+                if key.kind == KeyEventKind::Press {
+                    self.on_key(key);
+                }
             }
+            Event::Mouse(mouse) => {
+                self.on_mouse(mouse.kind, mouse.column, mouse.row, mouse.modifiers);
+            }
+            _ => {}
         }
+    }
+
+    // -- Mouse ------------------------------------------------------------
+
+    /// Handle a mouse event: left-click places the cursor (or switches
+    /// tabs), wheel scrolls the viewport, right/middle clicks are ignored.
+    pub fn on_mouse(
+        &mut self,
+        kind: MouseEventKind,
+        column: u16,
+        row: u16,
+        _modifiers: KeyModifiers,
+    ) {
+        match kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if row == 0 {
+                    // Click on the tab bar: switch to the clicked tab.
+                    if let Some(index) = self.tab_at_column(column) {
+                        self.switch_to(index);
+                    }
+                    return;
+                }
+                // Click inside the editor viewport: place the cursor.
+                let editor_row = row.saturating_sub(1);
+                if editor_row >= self.viewport_h as u16 {
+                    return;
+                }
+                let buf_line = self.scroll_top + editor_row as usize;
+                let buf_col = self.col_off + column as usize;
+                self.cursor_line = buf_line;
+                self.cursor_col = buf_col;
+                self.clamp_cursor();
+                self.clamp_scroll();
+            }
+            MouseEventKind::ScrollUp => {
+                let n = self.viewport_h.saturating_sub(1);
+                self.scroll_top = self.scroll_top.saturating_sub(n);
+                self.clamp_scroll();
+            }
+            MouseEventKind::ScrollDown => {
+                let n = self.viewport_h.saturating_sub(1);
+                self.scroll_top += n;
+                let max_scroll = self.doc().line_count().saturating_sub(self.viewport_h);
+                self.scroll_top = self.scroll_top.min(max_scroll);
+                self.clamp_scroll();
+            }
+            _ => {}
+        }
+    }
+
+    /// Return the index of the tab at `column`, or `None` if the click
+    /// landed on empty tab-bar space (the fill span).
+    fn tab_at_column(&self, column: u16) -> Option<usize> {
+        let mut col: u16 = 0;
+        for i in 0..self.docs.len() {
+            let title = self.doc_title(i);
+            let title = if i == self.active {
+                title
+            } else {
+                title.trim_end().to_string() + " │"
+            };
+            let width = title.chars().count() as u16;
+            if column >= col && column < col + width {
+                return Some(i);
+            }
+            col += width;
+        }
+        None
     }
 
     // -- Drawing -----------------------------------------------------------
@@ -1579,5 +1655,265 @@ mod tests {
         app.prompt = Some((PromptKind::SaveAs, "/some/path".to_string()));
         app.on_key(plain(KeyCode::Esc));
         assert!(app.prompt.is_none(), "Esc must cancel the prompt");
+    }
+
+    // -- Mouse tests ----------------------------------------------------
+
+    fn setup_viewport(app: &mut App, h: usize, w: usize) {
+        app.viewport_h = h;
+        app.viewport_w = w;
+    }
+
+    #[test]
+    fn left_click_mid_line_places_cursor() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        // Type "hello world" on line 0, cursor at col 11
+        typed(&mut app, "hello world");
+        // Click at column 6 (0-indexed), row 1 (first editor row) → buffer col 6
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            6,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 6);
+    }
+
+    #[test]
+    fn left_click_past_end_of_line_clamps_to_line_end() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        typed(&mut app, "hi");
+        // Click far past end of line 0 → clamps to col 2
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            99,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 2);
+    }
+
+    #[test]
+    fn left_click_past_last_line_clamps_to_last_line_end() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        typed(&mut app, "hello");
+        // Click row 50 (far past last line) → clamps to line 0 end
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            50,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 5);
+    }
+
+    #[test]
+    fn left_click_with_scroll_offset_maps_to_buffer_position() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 5, 40);
+        // Type 10 lines of content
+        for i in 0..10 {
+            typed(&mut app, &format!("line{i}"));
+            if i < 9 {
+                app.on_key(plain(KeyCode::Enter));
+            }
+        }
+        // Scroll down by 3 lines
+        app.scroll_top = 3;
+        // Click at editor row 2 (screen row 2, editor starts at row 1) → buffer line 3+2=5
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            3,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.cursor_line, 5);
+    }
+
+    #[test]
+    fn click_tab_switches_active_document() {
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_untitled()],
+            Lang::En,
+        );
+        // Tab bar is row 0. First tab occupies columns 0..len(" [Untitled] ").
+        let first_tab_width = app.doc_title(0).chars().count();
+        // Click in the second tab's column range
+        let second_tab_col = first_tab_width as u16;
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            second_tab_col,
+            0,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn click_empty_tab_bar_space_does_nothing() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        let original_active = app.active;
+        // Click far to the right of the tab bar (on the fill span)
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            99,
+            0,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(
+            app.active, original_active,
+            "click on fill must not switch tabs"
+        );
+    }
+
+    #[test]
+    fn wheel_scroll_up_moves_viewport() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        // Type enough lines to scroll
+        for i in 0..20 {
+            typed(&mut app, &format!("line{i}"));
+            if i < 19 {
+                app.on_key(plain(KeyCode::Enter));
+            }
+        }
+        // Move cursor to line 0 so clamp_scroll won't fight the scroll
+        app.cursor_line = 0;
+        app.scroll_top = 5;
+        app.on_mouse(MouseEventKind::ScrollUp, 0, 5, KeyModifiers::NONE);
+        assert!(app.scroll_top < 5, "scroll_up must decrease scroll_top");
+    }
+
+    #[test]
+    fn wheel_scroll_down_moves_viewport() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        for i in 0..20 {
+            typed(&mut app, &format!("line{i}"));
+            if i < 19 {
+                app.on_key(plain(KeyCode::Enter));
+            }
+        }
+        // Move cursor to last line so clamp_scroll won't fight the scroll
+        app.cursor_line = 19;
+        app.scroll_top = 5;
+        app.on_mouse(MouseEventKind::ScrollDown, 0, 5, KeyModifiers::NONE);
+        assert!(app.scroll_top > 5, "scroll_down must increase scroll_top");
+    }
+
+    #[test]
+    fn wheel_scroll_up_clamped_at_zero() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        app.scroll_top = 0;
+        app.on_mouse(MouseEventKind::ScrollUp, 0, 5, KeyModifiers::NONE);
+        assert_eq!(app.scroll_top, 0, "scroll_up must not go below zero");
+    }
+
+    #[test]
+    fn wheel_scroll_down_clamped_at_max() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        for i in 0..20 {
+            typed(&mut app, &format!("line{i}"));
+            if i < 19 {
+                app.on_key(plain(KeyCode::Enter));
+            }
+        }
+        // Set scroll_top beyond max
+        app.scroll_top = 100;
+        app.on_mouse(MouseEventKind::ScrollDown, 0, 5, KeyModifiers::NONE);
+        let max_scroll = app.doc().line_count().saturating_sub(app.viewport_h);
+        assert_eq!(app.scroll_top, max_scroll, "scroll_down must clamp at max");
+    }
+
+    #[test]
+    fn click_below_viewport_ignored() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        typed(&mut app, "hello");
+        let original_line = app.cursor_line;
+        // Click below the editor viewport (row >= 1 + viewport_h)
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            15,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(
+            app.cursor_line, original_line,
+            "click below viewport must be ignored"
+        );
+    }
+
+    #[test]
+    fn right_click_ignored() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 10, 40);
+        typed(&mut app, "hello");
+        let original_line = app.cursor_line;
+        let original_col = app.cursor_col;
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            5,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(
+            app.cursor_line, original_line,
+            "right click must not move cursor"
+        );
+        assert_eq!(
+            app.cursor_col, original_col,
+            "right click must not move cursor"
+        );
+    }
+
+    #[test]
+    fn click_brings_offscreen_cursor_onscreen() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        setup_viewport(&mut app, 5, 40);
+        // Type 10 lines
+        for i in 0..10 {
+            typed(&mut app, &format!("line{i}"));
+            if i < 9 {
+                app.on_key(plain(KeyCode::Enter));
+            }
+        }
+        // Cursor is at line 0, scroll_top is 0 (showing lines 0-4)
+        // Scroll down manually to 8 so lines 8-9 are visible but line 0 is off-screen
+        app.scroll_top = 8;
+        // Click at the top of the viewport (row 1, editor_row 0) → buffer line 8
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            1,
+            KeyModifiers::NONE,
+        );
+        // Cursor should now be at line 8
+        assert_eq!(app.cursor_line, 8);
+        // Now click above the viewport at row 1 again but with scroll_top=8
+        // This maps to buffer line 8, which is on-screen, so no adjustment needed
+        // To test "bringing on-screen": set cursor far away, then click within viewport
+        app.cursor_line = 15;
+        app.scroll_top = 8;
+        // Click at editor row 0 → buffer line 8, cursor moves to 8
+        app.on_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            1,
+            KeyModifiers::NONE,
+        );
+        assert_eq!(app.cursor_line, 8);
+        // clamp_scroll should have adjusted scroll_top since cursor (8) is now
+        // within the viewport (8..13), so scroll_top stays 8
+        assert_eq!(app.scroll_top, 8);
     }
 }

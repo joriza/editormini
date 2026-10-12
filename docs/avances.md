@@ -4,8 +4,8 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 
 ## Estado actual
 
-- **Hito 1**: 5 de 11 tareas completadas (1, 2, 4, 5 y 7; la 3 —deshacer— se reordenó después de la 5 a pedido del dueño para tener algo probable antes).
-- **Verificación**: 78/78 tests, build con 0 warnings.
+- **Hito 1**: 6 de 11 tareas completadas (1, 2, 4, 5, 7 y 9; la 3 —deshacer— se reordenó después de la 5 a pedido del dueño para tener algo probable antes).
+- **Verificación**: 91/91 tests, build con 0 warnings.
 - **Verificado por el dueño**: escritura correcta, guardado, prompt de salida, `●` de modificado en pestañas.
 
 ## Cronología
@@ -19,6 +19,7 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 | 2026-10-12 | `58c1fa6` | Tarea 5 — Cierre de pestaña con prompt (`Ctrl+W`), salto de panel (`Ctrl+1/2`), cursor por pestaña; detectado y corregido `Ctrl+Q → N` sin efecto | 44 tests; aprobado por el dueño |
 | 2026-10-12 | — | Tarea 8 — Ciclo de archivos: PromptKind{OpenFile,SaveAs} prompt state machine, Ctrl+Shift+S/F3 save_all, Ctrl+O open prompt, Ctrl+S on modified untitled opens SaveAs, Document::save_as, i18n keys (OpenFile, SaveAs, SavedAll, NoModifiedFiles, FileOpened, SavedAs) | 78 tests; build 0 warnings |
 | 2026-10-12 | — | Tarea 7 — i18n completo: auditoría de rutas de error (IoError/NotUtf8/OutOfBounds/ReadOnly), corrección de 3 `format!("{e}")` sin traducir en undo/redo/do_insert, corrección de `read-only` hardcodeado, traslado de `ALL_KEYS` al módulo de tests para eliminar warning, 3 tests con assertions rotas por migración i18n corregidas | 78 tests; build 0 warnings |
+| 2026-10-12 | — | Tarea 9 — Mouse básico: clic para colocar cursor (con mapeo pantalla→buffer que respeta scroll_top y offset), clic en pestaña para cambiar documento, rueda de scroll (ScrollUp/ScrollDown con mismos límites que PgUp/PgDn), clic derecho ignorado; eventos de mouse enrutados por `App::on_mouse` para tests determinísticos | 91 tests; build 0 warnings |
 
 ## Reordenamientos decididos
 
