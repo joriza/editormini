@@ -40,4 +40,5 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 1. Tarea 6 — resaltado por extensión con tema Dark+ (el más visible).
 2. Tarea 3 — deshacer/rehacer acotado (Ctrl+Z/Y, tandas de tipeo, historia por pestaña).
 3. **Multi-cursor (a futuro, pedido del dueño)** — el modelo actual usa un único `(cursor_line, cursor_col)` por pestaña, pero las operaciones de documento ya son posición-explícitas (`EditRecord` con `line`/`col`), así que agregar multi-cursor es barato: `Vec<Cursor { anchor, head }>` con el primario al final, las ediciones abanican por cursor y se normalizan al terminar; render itera cursores. Variantes VS Code después: `Ctrl+D` (añadir siguiente coincidencia), `Ctrl+Alt+↑/↓` (cursor en columna), `Alt+Click`.
+4. **Widget de búsqueda compacto estilo VS Code (a futuro, pedido del dueño)** — hoy el diálogo de búsqueda/reemplazo es una barra de 1 fila a lo ancho del editor; la evolución es un widget flotante compacto arriba a la derecha (solo el ancho de sus campos, con botones implícitos), como el find-widget de VS Code.
 
