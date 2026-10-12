@@ -207,7 +207,7 @@ impl App {
         });
         for record in group.iter().rev() {
             if let Err(e) = self.doc_mut().apply(&record.inverse()) {
-                self.status = format!("{e}");
+                self.status = i18n::error_message(self.lang, &e);
             }
         }
         self.histories[self.active].redo.push(group);
@@ -243,7 +243,7 @@ impl App {
         });
         for record in &group {
             if let Err(e) = self.doc_mut().apply(record) {
-                self.status = format!("{e}");
+                self.status = i18n::error_message(self.lang, &e);
             }
         }
         self.histories[self.active].undo.push(group);
@@ -273,11 +273,11 @@ impl App {
                 Some(record)
             }
             Err(DocumentError::ReadOnly) => {
-                self.status = "read-only".to_string();
+                self.status = i18n::t(self.lang, Key::ReadOnly).to_string();
                 None
             }
             Err(e) => {
-                self.status = format!("{e}");
+                self.status = i18n::error_message(self.lang, &e);
                 None
             }
         }
@@ -303,7 +303,7 @@ impl App {
             match self.doc_mut().delete_range(line, col, line, col + 1) {
                 Ok(record) => records.push(record),
                 Err(e) => {
-                    self.status = format!("{e}");
+                    self.status = i18n::error_message(self.lang, &e);
                     return;
                 }
             }
@@ -337,7 +337,7 @@ impl App {
         };
         match result {
             Ok(record) => self.record_edits(vec![record], false),
-            Err(e) => self.status = format!("{e}"),
+            Err(e) => self.status = i18n::error_message(self.lang, &e),
         }
         self.clamp_cursor();
     }
@@ -354,7 +354,7 @@ impl App {
         };
         match result {
             Ok(record) => self.record_edits(vec![record], false),
-            Err(e) => self.status = format!("{e}"),
+            Err(e) => self.status = i18n::error_message(self.lang, &e),
         }
         self.clamp_cursor();
     }
@@ -374,7 +374,7 @@ impl App {
             Err(DocumentError::Untitled) if self.doc().is_modified() => {
                 self.prompt = Some((PromptKind::SaveAs, String::new()));
             }
-            Err(e) => self.status = format!("{e}"),
+            Err(e) => self.status = i18n::error_message(self.lang, &e),
         }
     }
 
@@ -386,7 +386,7 @@ impl App {
         for i in 0..self.docs.len() {
             if self.docs[i].is_modified() && self.docs[i].path().is_some() {
                 if let Err(e) = self.docs[i].save() {
-                    failure = Some(e.to_string());
+                    failure = Some(i18n::error_message(self.lang, &e));
                     break;
                 }
                 saved += 1;
@@ -599,7 +599,7 @@ impl App {
                         && doc.path().is_some()
                         && let Err(e) = doc.save()
                     {
-                        failure = Some(e.to_string());
+                        failure = Some(i18n::error_message(self.lang, &e));
                         break;
                     }
                 }
@@ -616,7 +616,7 @@ impl App {
                 if self.docs[index].path().is_some()
                     && let Err(e) = self.docs[index].save()
                 {
-                    failure = Some(e.to_string());
+                    failure = Some(i18n::error_message(self.lang, &e));
                 }
                 match failure {
                     Some(e) => {
@@ -681,7 +681,7 @@ impl App {
                             self.status = i18n::tr(self.lang, Key::FileOpened, &[("path", path)]);
                         }
                         Err(e) => {
-                            self.status = e.to_string();
+                            self.status = i18n::error_message(self.lang, &e);
                         }
                     }
                 } else {
@@ -700,7 +700,7 @@ impl App {
                         self.status = format!("{} {bytes} B", self.status);
                     }
                     Err(e) => {
-                        self.status = e.to_string();
+                        self.status = i18n::error_message(self.lang, &e);
                     }
                 }
             }
@@ -828,7 +828,11 @@ impl App {
                 ("col", &(self.cursor_col + 1).to_string()),
             ],
         );
-        let mode = if self.overwrite { "OVR " } else { "" };
+        let mode = if self.overwrite {
+            i18n::t(self.lang, Key::OverwriteIndicator)
+        } else {
+            ""
+        };
         let left = format!("{}{mode}{}", self.doc_title(self.active).trim_end(), pos);
         let right = self.status.clone();
         let width = area.width as usize;
@@ -922,7 +926,11 @@ mod tests {
         );
         let on_disk = std::fs::read_to_string(&path).expect("file saved");
         assert_eq!(on_disk, "contenido\r\n");
-        assert!(app.status.contains("Saved"), "status: {}", app.status);
+        assert!(
+            app.status.contains(i18n::t(Lang::En, Key::Saved)),
+            "status: {}",
+            app.status
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1425,7 +1433,12 @@ mod tests {
             "content loaded"
         );
         assert!(app.prompt.is_none(), "prompt should be closed");
-        assert!(app.status.contains("Opened"), "status: {}", app.status);
+        assert!(
+            app.status
+                .starts_with(&i18n::t(Lang::En, Key::FileOpened).replace("{path}", "")),
+            "status: {}",
+            app.status
+        );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1452,7 +1465,12 @@ mod tests {
         );
         assert_eq!(new_doc.line_count(), 1, "new file has one empty line");
         assert!(app.prompt.is_none(), "prompt should be closed");
-        assert!(app.status.contains("Opened"), "status: {}", app.status);
+        assert!(
+            app.status
+                .starts_with(&i18n::t(Lang::En, Key::FileOpened).replace("{path}", "")),
+            "status: {}",
+            app.status
+        );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1492,7 +1510,12 @@ mod tests {
         );
         let content = std::fs::read_to_string(&path).expect("file written");
         assert_eq!(content, "save as content\r\n");
-        assert!(app.status.contains("Saved"), "status: {}", app.status);
+        assert!(
+            app.status
+                .starts_with(&i18n::t(Lang::En, Key::SavedAs).replace("{path}", "")),
+            "status: {}",
+            app.status
+        );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
     }

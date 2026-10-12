@@ -4,6 +4,16 @@
 //! switch between English (default) and Spanish, mirroring VS Code's
 //! "Configure Display Language" behavior. The catalog stays table-driven and
 //! dependency-free on purpose.
+//!
+//! ## Missing-key visibility in dev builds
+//!
+//! `t(lang, key)` asserts in `debug_assert!` that the returned string is
+//! non-empty.  In debug builds a missing or empty translation panics with a
+//! clear message; in release builds the assertion is compiled out (zero cost).
+//!
+//! The exhaustive `match` in `t` already guarantees a **compile error** if a
+//! `Key` variant is missing from any language arm — that is the primary
+//! compile-time safety net.
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -52,11 +62,23 @@ pub enum Key {
     FileOpened,
     /// Status: save-as succeeded.
     SavedAs,
+    /// Read-only document indicator in the status bar.
+    ReadOnly,
+    /// I/O error prefix shown in the status bar.
+    IoError,
+    /// File is not valid UTF-8.
+    NotUtf8,
+    /// Position out of bounds.
+    OutOfBounds,
+    /// CLI `--help` about text.
+    About,
+    /// Overwrite-mode indicator in the status bar.
+    OverwriteIndicator,
 }
 
 /// Translate `key` for `lang`.
 pub fn t(lang: Lang, key: Key) -> &'static str {
-    match (lang, key) {
+    let msg = match (lang, key) {
         (Lang::En, Key::ConfigLoadError) => "Failed to load editormini.json",
         (Lang::Es, Key::ConfigLoadError) => "No se pudo cargar editormini.json",
         (Lang::En, Key::Untitled) => "[Untitled]",
@@ -99,7 +121,28 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::FileOpened) => "Abierto {path}",
         (Lang::En, Key::SavedAs) => "Saved {path}",
         (Lang::Es, Key::SavedAs) => "Guardado como {path}",
-    }
+        // Error kinds mapped from DocumentError for status-bar display.
+        (Lang::En, Key::ReadOnly) => "read-only",
+        (Lang::Es, Key::ReadOnly) => "solo lectura",
+        (Lang::En, Key::IoError) => "I/O error",
+        (Lang::Es, Key::IoError) => "error de E/S",
+        (Lang::En, Key::NotUtf8) => "file is not valid UTF-8",
+        (Lang::Es, Key::NotUtf8) => "archivo no es UTF-8 válido",
+        (Lang::En, Key::OutOfBounds) => "position {line}:{col} out of bounds",
+        (Lang::Es, Key::OutOfBounds) => "posición {line}:{col} fuera de rango",
+        // CLI help / about text.
+        (Lang::En, Key::About) => {
+            "A VS Code-like TUI text editor\n\nKeys: F2 or Ctrl+S save \u{b7} Ctrl+Z undo \u{b7} Ctrl+Q quit \u{b7} Ins overwrite \u{b7} Ctrl+PgUp/PgDn switch tab"
+        }
+        (Lang::Es, Key::About) => {
+            "Un editor de texto TUI estilo VS Code\n\nTeclas: F2 o Ctrl+S guardar \u{b7} Ctrl+Z deshacer \u{b7} Ctrl+Q salir \u{b7} Ins sobrescribir \u{b7} Ctrl+PgUp/PgDn cambiar pesta\u{f1}a"
+        }
+        // Overwrite-mode compact indicator in the status bar.
+        (Lang::En, Key::OverwriteIndicator) => "OVR ",
+        (Lang::Es, Key::OverwriteIndicator) => "SOB ",
+    };
+    debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
+    msg
 }
 
 /// Translate and substitute `{placeholder}` values, e.g.
@@ -112,29 +155,57 @@ pub fn tr(lang: Lang, key: Key, args: &[(&str, &str)]) -> String {
     out
 }
 
+/// Return an i18n'd status-bar message for a [`DocumentError`].
+///
+/// Maps each error kind to a catalog key so the user sees a
+/// translated message instead of raw English `DocumentError` text.
+pub fn error_message(lang: Lang, error: &crate::document::DocumentError) -> String {
+    match error {
+        crate::document::DocumentError::Io(e) => {
+            format!("{}: {e}", t(lang, Key::IoError))
+        }
+        crate::document::DocumentError::NotUtf8 => t(lang, Key::NotUtf8).to_string(),
+        crate::document::DocumentError::Untitled => t(lang, Key::Untitled).to_string(),
+        crate::document::DocumentError::ReadOnly => t(lang, Key::ReadOnly).to_string(),
+        crate::document::DocumentError::OutOfBounds { line, col } => tr(
+            lang,
+            Key::OutOfBounds,
+            &[("line", &line.to_string()), ("col", &col.to_string())],
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const ALL_KEYS: &[Key] = &[
+        Key::ConfigLoadError,
+        Key::Untitled,
+        Key::SaveChangesPrompt,
+        Key::TerminalRequired,
+        Key::Saved,
+        Key::LnCol,
+        Key::StartupHints,
+        Key::OverwriteOn,
+        Key::OverwriteOff,
+        Key::OpenFile,
+        Key::SaveAs,
+        Key::SavedAll,
+        Key::NoModifiedFiles,
+        Key::FileOpened,
+        Key::SavedAs,
+        Key::ReadOnly,
+        Key::IoError,
+        Key::NotUtf8,
+        Key::OutOfBounds,
+        Key::About,
+        Key::OverwriteIndicator,
+    ];
+
     #[test]
     fn every_key_resolves_in_every_language() {
-        for key in [
-            Key::ConfigLoadError,
-            Key::Untitled,
-            Key::SaveChangesPrompt,
-            Key::TerminalRequired,
-            Key::Saved,
-            Key::LnCol,
-            Key::StartupHints,
-            Key::OverwriteOn,
-            Key::OverwriteOff,
-            Key::OpenFile,
-            Key::SaveAs,
-            Key::SavedAll,
-            Key::NoModifiedFiles,
-            Key::FileOpened,
-            Key::SavedAs,
-        ] {
+        for &key in ALL_KEYS {
             for lang in [Lang::En, Lang::Es] {
                 let msg = t(lang, key);
                 assert!(!msg.is_empty(), "empty message for {lang:?}/{key:?}");
