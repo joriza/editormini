@@ -39,12 +39,19 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | `Ctrl+PgDn` / `Ctrl+PgUp` | pestaña siguiente / anterior (cicla) |
 | `Ctrl+1` | ir al último documento del panel 1 (`Ctrl+2` reservada para el panel 2) |
 | `Ctrl+Z` / `Ctrl+Y` | deshacer / rehacer (historial acotado por pestaña; cada tanda de tipeo es un paso) |
-| `F3` / `Ctrl+Shift+S` | guardar todo (pestañas con ruta; omite sin título) |
-| `Ctrl+O` | abrir archivo (prompt de ruta) |
-| `Ctrl+F` | buscar en el documento activo (diálogo con contador; `Enter`/`Shift+Enter` siguiente/anterior, `Esc` cierra; opciones case/regex a futuro) |
+| `F3` / `Ctrl+Shift+S` | guardar todo (pestañas con ruta; omite sin título) — fuera del diálogo de búsqueda |
+| `Ctrl+O` | abrir archivo: lista interactiva del directorio del documento activo — tipeá para filtrar, `↑`/`↓` elegís, `Enter` abre, `Esc` cancela (también acepta escribir una ruta directamente) |
+| `Ctrl+F` | buscar en el documento activo (diálogo con contador; `Enter`/`F3` siguiente, `Shift+Enter`/`Shift+F3` anterior, `Esc` cierra; opciones case/regex a futuro) |
 | `Ctrl+H` | reemplazar en el documento activo (diálogo con pestaña entre Query/Replace, `F5` reemplaza actual, `F6` reemplaza todo con confirmación Y/N) |
 | `Ctrl+Shift+F` | buscar en todos los documentos abiertos (itera coincidencias en orden de pestañas, cambia de pestaña al cruzar límites, muestra título del doc actual; `Esc` restaura la pestaña de inicio si no se navegó) |
 | `Ctrl+Shift+H` | reemplazar en todos los documentos abiertos (reemplaza actual y avanza cambiando pestañas; reemplazar todo con confirmación única muestra total de ocurrencias y número de archivos; docs solo-lectura se omiten; deshacer por pestaña) |
+| `Ctrl+C` / `Ctrl+Insert` | copiar (selección activa; sin selección copia la línea actual) |
+| `Ctrl+X` / `Shift+Supr` | cortar (selección activa; sin selección corta la línea actual) |
+| `Ctrl+V` / `Shift+Insert` | pegar (si hay selección activa la reemplaza; un `Ctrl+Z` deshace todo el reemplazo) |
+| `Shift+Flechas` / `Shift+Home/End` / `Shift+PgUp/PgDn` | seleccionar texto (ancla fija, como VS Code) |
+| `Ctrl+←` / `Ctrl+→` | mover el cursor de a palabras |
+| `Ctrl+Shift+←` / `Ctrl+Shift+→` | seleccionar de a palabras |
+| `Ctrl+Home` / `Ctrl+End` | inicio / fin del documento (con `Shift` selecciona) |
 | Clic izquierdo en el editor | colocar el cursor (se adapta al desplazamiento) |
 | Números de línea | margen de números de línea siempre visible, alineados a la derecha, con énfasis en la línea del cursor |
 | Clic izquierdo en una pestaña | cambiar al documento de esa pestaña |

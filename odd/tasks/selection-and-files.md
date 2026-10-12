@@ -19,8 +19,8 @@ interactive Ctrl+O file list. All with tests, i18n EN/ES where user-visible.
 - [x] T2 (S1): Render selection with a distinct background (new theme fields `selection_bg` Dark+ 0x264F78 / Light+ 0 ADD8E6-ish stub), composable with syntax spans; search match bg wins over selection bg. **Verify:** tests + USER. **Commit:** ea3ae99
 - [x] T3 (S2,S3): Ctrl+Left/Right move by word (VS Code boundaries: whitespace + punctuation split); Ctrl+Shift+Left/Right move-by-word selecting; Ctrl+Home/Ctrl+End jump to document start/end (with Shift they select). **Verify:** tests. **Commit:** ea3ae99
 - [x] T4 (S1): Clipboard via `arboard`: Ctrl+C copy (selection; with empty selection copies the current line — VS Code standard), Ctrl+X cut (selection else line), Ctrl+V paste (replaces active selection if any; inserts as ONE undo step; multi-line supported). Windows-classic fallbacks: Shift+Insert paste, Shift+Delete cut, Ctrl+Insert copy. **Verify:** tests + USER. **Commit:** —
-- [ ] T5 (S4): Ctrl+O interactive list of the active document's directory (cwd when untitled): type-to-filter on file name, Up/Down to move, Enter opens, Esc cancels; list renders above the status bar; directories shown with trailing `/` (not openable). **Verify:** tests + USER. **Commit:** —
-- [ ] T6 (S3,S5): Docs: README keymap additions (selection/clipboard/word movement/F3+Shift+F3/open list), avances row with evidence. **Commit:** —
+- [x] T5 (S4): Ctrl+O interactive list of the active document's directory (cwd when untitled): type-to-filter on file name, Up/Down to move, Enter opens, Esc cancels; list renders above the status bar; directories shown with trailing `/` (not openable). **Verify:** tests + USER. **Commit:** 3fc0ef7 (open list), T6 docs
+- [x] T6 (S3,S5): Docs: README keymap additions (selection/clipboard/word movement/F3+Shift+F3/open list), avances row with evidence. **Commit:** —
 
 ## Log
 
@@ -30,3 +30,4 @@ interactive Ctrl+O file list. All with tests, i18n EN/ES where user-visible.
 - L4: S5 delivered (Shift+F3) + status spacing/language position/left-segment priority in b9a004d; S6 backlog note 128b3a8; this doc 64fdf7d.
 - L6: T1-T3 GREEN in ea3ae99 (193 tests). Gotchas discovered: ratatui TestBackend render tests must prime the viewport with a first draw (else stale viewport_h=1 pins scroll_top to the cursor line); the search dialog overlays line 0 without pushing lines down; typed() leaves the cursor at doc end.
 - L5: T1-T3 first worker pass left 7 tests red (render spans discarded; word-right consumed next line's word; Shift+Home head not updated). Continuation launched with root-cause analysis.
+- L7: T4 landed 021505c (arboard 3.6.1, i18n ClipboardError, one consolidated clipboard test per the parallel-races rule); orchestrator fixed perform_cut branching on copied-text emptiness instead of real selection and wrote the missing tests after the worker stalled. T5 landed 3fc0ef7 (interactive open list + opened files now FOCUS their tab — pre-existing gap found by the new tests). T6 docs in this round's docs commit.
