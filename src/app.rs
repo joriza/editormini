@@ -2,9 +2,9 @@
 //!
 //! Slice scope: one pane from the pane tree, tab bar (render + Ctrl+PgUp/PgDn
 //! switching), editor viewport with cursor, save (F2/Ctrl+S), quit (Ctrl+Q)
-//! with unsaved-changes prompt, Insert-key overwrite toggle, and bounded
-//! per-tab undo/redo (Ctrl+Z/Ctrl+Y).
-//! Syntax highlighting and mouse support arrive in later tasks.
+//! with unsaved-changes prompt, Insert-key overwrite toggle, bounded
+//! per-tab undo/redo (Ctrl+Z/Ctrl+Y), syntax highlighting by extension
+//! (highlight.rs + theme.rs). Mouse support arrives in a later task.
 
 use std::io;
 
@@ -15,21 +15,14 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
+use crate::config::ThemeChoice;
 use crate::document::{Document, DocumentError, EditRecord};
+use crate::highlight;
 use crate::i18n::{self, Key, Lang};
 use crate::pane::PaneTree;
+use crate::theme::Theme;
 
 /// Dark+ palette subset used before the theme milestone formalizes it.
-mod colors {
-    use ratatui::style::Color;
-    pub const BG: Color = Color::Rgb(0x1E, 0x1E, 0x1E);
-    pub const FG: Color = Color::Rgb(0xD4, 0xD4, 0xD4);
-    pub const TAB_INACTIVE_BG: Color = Color::Rgb(0x2D, 0x2D, 0x2D);
-    pub const TAB_ACTIVE_BG: Color = Color::Rgb(0x09, 0x47, 0x7B);
-    pub const ACCENT: Color = Color::Rgb(0x00, 0x7A, 0xCC);
-    pub const MODIFIED: Color = Color::Rgb(0xE2, 0xC0, 0x89);
-}
-
 /// What a pending confirmation applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmKind {
@@ -93,6 +86,8 @@ pub struct App {
     /// next status update, so save results and errors stay readable.
     pub status: String,
     pub lang: Lang,
+    /// Active chrome theme (tabs, status bar, editor background).
+    pub theme: Theme,
 }
 
 impl App {
@@ -116,7 +111,13 @@ impl App {
             overwrite: false,
             status: i18n::t(lang, Key::StartupHints).to_string(),
             lang,
+            theme: Theme::for_choice(ThemeChoice::DarkPlus),
         }
+    }
+
+    /// Apply a configured theme to the running app.
+    pub fn set_theme(&mut self, choice: ThemeChoice) {
+        self.theme = Theme::for_choice(choice);
     }
 
     pub fn doc(&self) -> &Document {
@@ -224,9 +225,7 @@ impl App {
                 }
             }
             EditRecord::Delete {
-                end_line,
-                end_col,
-                ..
+                end_line, end_col, ..
             } => (*end_line, *end_col),
         });
         for record in &group {
@@ -633,10 +632,10 @@ impl App {
             let style = if active {
                 Style::new()
                     .fg(Color::White)
-                    .bg(colors::TAB_ACTIVE_BG)
+                    .bg(self.theme.tab_active_bg)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::new().fg(colors::FG).bg(colors::TAB_INACTIVE_BG)
+                Style::new().fg(self.theme.fg).bg(self.theme.tab_inactive_bg)
             };
             let title = self.doc_title(i);
             let title = if active {
@@ -648,7 +647,7 @@ impl App {
         }
         let fill = Span::styled(
             " ".repeat(area.width as usize),
-            Style::new().bg(colors::TAB_INACTIVE_BG),
+            Style::new().bg(self.theme.tab_inactive_bg),
         );
         spans.push(fill);
         f.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -657,13 +656,15 @@ impl App {
     fn draw_editor(&mut self, f: &mut Frame, area: ratatui::prelude::Rect) {
         let first = self.scroll_top;
         let last = (self.scroll_top + self.viewport_h).min(self.doc().line_count());
-        let visible: String = (first..last)
-            .map(|i| self.doc().line(i))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let widget = Paragraph::new(visible)
-            .style(Style::new().fg(colors::FG).bg(colors::BG))
-            .scroll((0, self.col_off as u16));
+        let lines: Vec<&str> = (first..last).map(|i| self.doc().line(i)).collect();
+        let extension = highlight::extension_of(self.doc().path());
+        let styled = highlight::styled_lines(
+            &lines,
+            extension.as_deref(),
+            self.theme.fg,
+            self.theme.bg,
+        );
+        let widget = Paragraph::new(styled);
         f.render_widget(widget, area);
 
         let x = area.x + (self.cursor_col - self.col_off) as u16;
@@ -675,7 +676,7 @@ impl App {
         if self.confirm.is_some() {
             let prompt = i18n::t(self.lang, Key::SaveChangesPrompt);
             let widget =
-                Paragraph::new(prompt).style(Style::new().fg(Color::Black).bg(colors::MODIFIED));
+                Paragraph::new(prompt).style(Style::new().fg(self.theme.prompt_fg).bg(self.theme.prompt_bg));
             f.render_widget(widget, area);
             return;
         }
@@ -700,7 +701,7 @@ impl App {
             Span::styled(format!("{left}{}", " ".repeat(pad)), Style::default()),
             Span::styled(right, Style::new().add_modifier(Modifier::BOLD)),
         ]);
-        let widget = Paragraph::new(line).style(Style::new().fg(Color::White).bg(colors::ACCENT));
+        let widget = Paragraph::new(line).style(Style::new().fg(Color::White).bg(self.theme.accent));
         f.render_widget(widget, area);
     }
 

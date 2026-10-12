@@ -6,8 +6,10 @@
 mod app;
 mod config;
 mod document;
+mod highlight;
 mod i18n;
 mod pane;
+mod theme;
 
 use clap::Parser;
 use std::io;
@@ -103,6 +105,7 @@ fn main() {
     };
 
     let mut app = app::App::new(docs, lang);
+    app.set_theme(config.theme);
     let result = app::run(&mut terminal, &mut app);
     restore_terminal(terminal);
     if let Err(e) = result {
