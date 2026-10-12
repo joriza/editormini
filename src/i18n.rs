@@ -146,10 +146,10 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Key::LnCol) => "Ln {ln}, Col {col}",
         (Lang::Es, Key::LnCol) => "Ln {ln}, Col {col}",
         (Lang::En, Key::StartupHints) => {
-            "F2/Ctrl+S save \u{b7} F3/Ctrl+Shift+S save all \u{b7} Ctrl+O open \u{b7} Ctrl+Z undo \u{b7} Ctrl+Q quit \u{b7} Ins overwrite \u{b7} Ctrl+PgUp/PgDn switch tab"
+            "F2/Ctrl+S save \u{b7} F3/Ctrl+Shift+S save all \u{b7} Ctrl+O open \u{b7} Ctrl+Q quit \u{b7} Ins overwrite \u{b7} Ctrl+PgUp/PgDn switch tab"
         }
         (Lang::Es, Key::StartupHints) => {
-            "F2/Ctrl+S guardar \u{b7} F3/Ctrl+Shift+S guardar todo \u{b7} Ctrl+O abrir \u{b7} Ctrl+Z deshacer \u{b7} Ctrl+Q salir \u{b7} Ins sobrescribir \u{b7} Ctrl+PgUp/PgDn cambiar pesta\u{f1}a"
+            "F2/Ctrl+S guardar \u{b7} F3/Ctrl+Shift+S guardar todo \u{b7} Ctrl+O abrir \u{b7} Ctrl+Q salir \u{b7} Ins sobrescribir \u{b7} Ctrl+PgUp/PgDn cambiar pesta\u{f1}a"
         }
         (Lang::En, Key::OverwriteOn) => "Overwrite ON",
         (Lang::Es, Key::OverwriteOn) => "Sobrescribir ACTIVADO",
@@ -342,5 +342,19 @@ mod tests {
     #[test]
     fn languages_are_distinct() {
         assert_ne!(t(Lang::En, Key::Untitled), t(Lang::Es, Key::Untitled));
+    }
+
+    #[test]
+    fn startup_hints_omit_obvious_keys() {
+        // Owner: undo is as obvious as find, which was never listed — both
+        // stay out of the always-on hint bar to keep it readable.
+        assert!(
+            !t(Lang::En, Key::StartupHints).contains("undo"),
+            "startup hints must not list undo"
+        );
+        assert!(
+            !t(Lang::Es, Key::StartupHints).contains("deshacer"),
+            "startup hints must not list deshacer"
+        );
     }
 }
