@@ -16,7 +16,7 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::config::ThemeChoice;
 use crate::document::{Document, DocumentError, EditRecord};
@@ -2178,27 +2178,41 @@ impl App {
         self.draw_open_list(f, editor_area);
     }
 
-    /// Interactive Ctrl+O candidate list: up to 5 entries at the bottom of
-    /// the editor area, the highlighted one styled with the prompt colors.
+    /// Interactive Ctrl+O candidate list: a bordered popup at the bottom of
+    /// the editor area, width fitted to the longest visible name, the
+    /// highlighted entry in prompt colors, hint line in the title.
     fn draw_open_list(&mut self, f: &mut Frame, editor_area: ratatui::prelude::Rect) {
         if !matches!(self.prompt, Some((PromptKind::OpenFile, _)))
             || self.open_candidates.is_empty()
         {
             return;
         }
-        let visible = self.open_candidates.len().min(5);
-        let height = visible as u16;
+        let candidates = self.open_candidates.clone();
+        let selected = self.open_selected;
+        let visible = candidates.len().min(5);
+        // Fit the width to the longest visible name (marker + padding +
+        // borders), never narrower than 24 nor wider than the editor.
+        let skip = (selected + 1).saturating_sub(visible);
+        let longest = candidates
+            .iter()
+            .skip(skip)
+            .take(visible)
+            .map(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().chars().count())
+                    .unwrap_or(0)
+            })
+            .max()
+            .unwrap_or(0);
+        let width = (longest as u16 + 8).max(24).min(editor_area.width);
+        let height = (visible as u16 + 2).min(editor_area.height);
         let y = editor_area.y + editor_area.height.saturating_sub(height);
         let area = ratatui::prelude::Rect {
             x: editor_area.x,
             y,
-            width: editor_area.width,
+            width,
             height,
         };
-        let candidates = self.open_candidates.clone();
-        let selected = self.open_selected;
-        // Keep the highlighted entry inside the visible window.
-        let skip = (selected + 1).saturating_sub(visible);
         let lines: Vec<Line> = candidates
             .iter()
             .skip(skip)
@@ -2222,7 +2236,24 @@ impl App {
                 Line::from(Span::styled(format!("{marker}{name}"), style))
             })
             .collect();
-        f.render_widget(Paragraph::new(lines), area);
+        let hints = i18n::t(self.lang, Key::OpenListHints);
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(self.theme.accent))
+            .title(Span::styled(
+                hints,
+                Style::new()
+                    .fg(self.theme.line_number_fg)
+                    .add_modifier(Modifier::DIM),
+            ));
+        // Blank the popup area first so editor text cannot bleed through.
+        f.render_widget(Clear, area);
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .style(Style::new().bg(self.theme.bg)),
+            area,
+        );
     }
 
     fn doc_title(&self, index: usize) -> String {
@@ -5470,17 +5501,25 @@ mod tests {
         terminal.draw(|f| app.draw(f)).unwrap();
         app.on_key(ctrl(KeyCode::Char('o')));
         terminal.draw(|f| app.draw(f)).unwrap();
-        // 2 candidates -> the list occupies the LAST TWO editor rows
-        // (frame rows 7-8), sorted by name: only.txt then seed.txt.
-        let mut first = String::new();
+        // 2 candidates -> bordered popup, height 4 (2 entries + borders),
+        // anchored at the editor bottom: frame rows 5-8, width 24 (min).
+        // Row 5: top border with the hint title; row 6: selected entry;
+        // row 7: second entry; row 8: bottom border.
+        let mut top = String::new();
+        let mut sel_row = String::new();
         let mut second = String::new();
-        for col in 0..20u16 {
-            first.push_str(terminal.backend().buffer().get(col, 7).symbol());
-            second.push_str(terminal.backend().buffer().get(col, 8).symbol());
+        for col in 0..26u16 {
+            top.push_str(terminal.backend().buffer().get(col, 5).symbol());
+            sel_row.push_str(terminal.backend().buffer().get(col, 6).symbol());
+            second.push_str(terminal.backend().buffer().get(col, 7).symbol());
         }
-        assert!(first.contains("> only.txt"), "row 7: {first}");
-        assert!(second.contains("seed.txt"), "row 8: {second}");
-        let cell = terminal.backend().buffer().get(0, 7);
+        assert!(top.contains('┌'), "top border: {top}");
+        assert!(top.contains("pick"), "hint title: {top}");
+        assert!(sel_row.contains("> only.txt"), "row 6: {sel_row}");
+        assert!(second.contains("seed.txt"), "row 7: {second}");
+        // The right border closes the fitted width at col 23.
+        assert_eq!(terminal.backend().buffer().get(23, 6).symbol(), "│");
+        let cell = terminal.backend().buffer().get(1, 6);
         assert_eq!(cell.style().bg, Some(Color::Rgb(0xE2, 0xC0, 0x89)));
         let _ = std::fs::remove_dir_all(&dir);
     }
