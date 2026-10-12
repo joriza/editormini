@@ -90,6 +90,12 @@ pub fn extension_of(path: Option<&Path>) -> Option<String> {
         .map(|ext| ext.to_ascii_lowercase())
 }
 
+/// Return the syntax language name for a file extension, or `None`
+/// for unknown extensions (caller should map to the i18n `PlainText` key).
+pub fn language_name(ext: Option<&str>) -> Option<&'static str> {
+    ext.and_then(syntax_for_extension).map(|s| s.name.as_str())
+}
+
 fn syntax_for_extension(ext: &str) -> Option<&'static SyntaxReference> {
     /// Extensions absent from syntect's default set map to their closest
     /// structural cousin until the external-grammar loader (docs/plan.md)

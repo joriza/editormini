@@ -4,8 +4,8 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 
 ## Estado actual
 
-- **Hito 1**: 6 de 11 tareas completadas (1, 2, 4, 5, 7 y 9; la 3 —deshacer— se reordenó después de la 5 a pedido del dueño para tener algo probable antes).
-- **Verificación**: 93/93 tests, build con 0 warnings.
+- **Hito 1**: 7 de 11 tareas completadas (1, 2, 4, 5, 7, 9 y 10; la 3 —deshacer— se reordenó después de la 5 a pedido del dueño para tener algo probable antes).
+- **Verificación**: 106/106 tests, build con 0 warnings.
 - **Ronda de hardening (task 9 mouse)**: refactor de `tab_layout` helper compartido entre render y hit-testing, test de `col_off` no nulo, y tests de rueda de scroll con distancia exacta.
 - **Verificado por el dueño**: escritura correcta, guardado, prompt de salida, `●` de modificado en pestañas.
 
@@ -21,6 +21,7 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 | 2026-10-12 | — | Tarea 8 — Ciclo de archivos: PromptKind{OpenFile,SaveAs} prompt state machine, Ctrl+Shift+S/F3 save_all, Ctrl+O open prompt, Ctrl+S on modified untitled opens SaveAs, Document::save_as, i18n keys (OpenFile, SaveAs, SavedAll, NoModifiedFiles, FileOpened, SavedAs) | 78 tests; build 0 warnings |
 | 2026-10-12 | — | Tarea 7 — i18n completo: auditoría de rutas de error (IoError/NotUtf8/OutOfBounds/ReadOnly), corrección de 3 `format!("{e}")` sin traducir en undo/redo/do_insert, corrección de `read-only` hardcodeado, traslado de `ALL_KEYS` al módulo de tests para eliminar warning, 3 tests con assertions rotas por migración i18n corregidas | 78 tests; build 0 warnings |
 | 2026-10-12 | — | Tarea 9 — Mouse básico: clic para colocar cursor (con mapeo pantalla→buffer que respeta scroll_top y offset), clic en pestaña para cambiar documento, rueda de scroll (ScrollUp/ScrollDown con mismos límites que PgUp/PgDn), clic derecho ignorado; eventos de mouse enrutados por `App::on_mouse` para tests determinísticos | 91 tests; build 0 warnings |
+| 2026-10-12 | — | Tarea 10 — Status bar: filename ●, Ln:col, modified ●, overwrite OVR, read-only [RO], language indicator (Rust/Markdown/Plain text), ellipsis truncation on narrow terminals, theme-styled; i18n key PlainText added; 13 new tests | 106 tests; build 0 warnings |
 
 ## Reordenamientos decididos
 
@@ -31,4 +32,4 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 
 1. Tarea 3 — deshacer/rehacer acotado (Ctrl+Z/Y, tandas de tipeo, historia por pestaña).
 2. Tarea 6 — resaltado por extensión con tema Dark+ (el más visible).
-3. Tareas 8-11: ciclo de archivos, mouse, status bar, release portable.
+3. Tarea 11 — release portable.

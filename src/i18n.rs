@@ -74,6 +74,8 @@ pub enum Key {
     About,
     /// Overwrite-mode indicator in the status bar.
     OverwriteIndicator,
+    /// Fallback language name for files with no recognized syntax.
+    PlainText,
 }
 
 /// Translate `key` for `lang`.
@@ -140,6 +142,9 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         // Overwrite-mode compact indicator in the status bar.
         (Lang::En, Key::OverwriteIndicator) => "OVR ",
         (Lang::Es, Key::OverwriteIndicator) => "SOB ",
+        // Fallback language name for files with no recognized syntax.
+        (Lang::En, Key::PlainText) => "Plain text",
+        (Lang::Es, Key::PlainText) => "Texto sin formato",
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg
@@ -201,6 +206,7 @@ mod tests {
         Key::OutOfBounds,
         Key::About,
         Key::OverwriteIndicator,
+        Key::PlainText,
     ];
 
     #[test]

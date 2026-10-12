@@ -235,6 +235,13 @@ impl Document {
         self.path.as_deref()
     }
 
+    // Test helper: force the read-only flag so status-bar tests can
+    // verify the read-only marker without creating a 10 MB fixture.
+    #[cfg(test)]
+    pub fn set_read_only(&mut self) {
+        self.read_only = true;
+    }
+
     // Read by the theme milestone (rehighlight on BOM-sensitive content).
     #[allow(dead_code)]
     pub fn line_ending(&self) -> LineEnding {

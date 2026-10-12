@@ -877,6 +877,54 @@ impl App {
         f.set_cursor_position((x, y));
     }
 
+    /// Compose the status-bar left and right segments for the active doc
+    /// (no modal open), truncating the left side with ellipsis when the
+    /// combined content exceeds `width` terminal cells.
+    ///
+    /// Left:  doc identity + cursor position + mode hints.
+    /// Right: language indicator + transient status message.
+    fn status_line(&self, width: usize) -> (String, String) {
+        let doc = self.doc();
+        let pos = i18n::tr(
+            self.lang,
+            Key::LnCol,
+            &[
+                ("ln", &(self.cursor_line + 1).to_string()),
+                ("col", &(self.cursor_col + 1).to_string()),
+            ],
+        );
+        let mode = if self.overwrite {
+            i18n::t(self.lang, Key::OverwriteIndicator)
+        } else {
+            ""
+        };
+        let read_only = if doc.is_read_only() {
+            format!(" {}", i18n::t(self.lang, Key::ReadOnly))
+        } else {
+            String::new()
+        };
+        let mut left = format!(
+            "{}{mode}{pos}{read_only}",
+            self.doc_title(self.active).trim_end()
+        );
+        let ext = highlight::extension_of(doc.path());
+        let language = highlight::language_name(ext.as_deref())
+            .unwrap_or_else(|| i18n::t(self.lang, Key::PlainText));
+        let right = format!(" {language} {}", self.status);
+        // Truncate left with ellipsis when total content exceeds width.
+        let right_len = right.chars().count();
+        let available = width.saturating_sub(right_len);
+        if left.chars().count() > available {
+            let truncate_to = available.saturating_sub(1);
+            left = if truncate_to > 0 {
+                format!("{}…", left.chars().take(truncate_to).collect::<String>())
+            } else {
+                "…".to_string()
+            };
+        }
+        (left, right)
+    }
+
     fn draw_status(&mut self, f: &mut Frame, area: ratatui::prelude::Rect) {
         if let Some((kind, input)) = &self.prompt {
             let title = match kind {
@@ -902,26 +950,8 @@ impl App {
             f.render_widget(widget, area);
             return;
         }
-        let pos = i18n::tr(
-            self.lang,
-            Key::LnCol,
-            &[
-                ("ln", &(self.cursor_line + 1).to_string()),
-                ("col", &(self.cursor_col + 1).to_string()),
-            ],
-        );
-        let mode = if self.overwrite {
-            i18n::t(self.lang, Key::OverwriteIndicator)
-        } else {
-            ""
-        };
-        let left = format!("{}{mode}{}", self.doc_title(self.active).trim_end(), pos);
-        let right = self.status.clone();
         let width = area.width as usize;
-        let mut left = left;
-        if left.chars().count() > width {
-            left = left.chars().take(width).collect();
-        }
+        let (left, right) = self.status_line(width);
         let pad = width.saturating_sub(left.chars().count() + right.chars().count());
         let line = Line::from(vec![
             Span::styled(format!("{left}{}", " ".repeat(pad)), Style::default()),
@@ -1967,5 +1997,137 @@ mod tests {
         // clamp_scroll should have adjusted scroll_top since cursor (8) is now
         // within the viewport (8..13), so scroll_top stays 8
         assert_eq!(app.scroll_top, 8);
+    }
+
+    // -- Status bar content tests ----------------------------------
+
+    #[test]
+    fn status_line_shows_untitled_for_pathless_doc() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.status.clear();
+        let (left, _) = app.status_line(80);
+        assert!(left.contains("[Untitled]"), "left: {left}");
+    }
+
+    #[test]
+    fn status_line_shows_filename_for_pathed_doc() {
+        let dir = temp_dir("statusbar");
+        let path = dir.join("main.rs");
+        let mut app = App::new(vec![Document::new_with_path(&path)], Lang::En);
+        app.status.clear();
+        let (left, _) = app.status_line(80);
+        assert!(left.contains("main.rs"), "left: {left}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_line_includes_lncol() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.status.clear();
+        app.cursor_line = 2;
+        app.cursor_col = 3;
+        let (left, _) = app.status_line(80);
+        assert!(left.contains("Ln 3, Col 4"), "left: {left}");
+    }
+
+    #[test]
+    fn status_line_shows_overwrite_indicator() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.status.clear();
+        app.overwrite = true;
+        let (left, _) = app.status_line(80);
+        assert!(left.contains("OVR"), "left: {left}");
+    }
+
+    #[test]
+    fn status_line_omits_overwrite_when_off() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.status.clear();
+        let (left, _) = app.status_line(80);
+        assert!(!left.contains("OVR"), "left: {left}");
+    }
+
+    #[test]
+    fn status_line_shows_read_only_marker() {
+        let mut doc = Document::new_with_path(std::path::Path::new("/tmp/big.bin"));
+        doc.set_read_only();
+        let mut app = App::new(vec![doc], Lang::En);
+        app.status.clear();
+        let (left, _) = app.status_line(80);
+        assert!(left.contains("read-only"), "left: {left}");
+    }
+
+    #[test]
+    fn status_line_shows_language_indicator() {
+        let dir = temp_dir("lang");
+        let path = dir.join("lib.rs");
+        std::fs::write(&path, "fn main() {}").expect("pre-create");
+        let app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        let (_, right) = app.status_line(80);
+        assert!(right.contains("Rust"), "right: {right}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_line_shows_plain_text_for_unknown_extension() {
+        let dir = temp_dir("plain");
+        let path = dir.join("data.xyz");
+        std::fs::write(&path, "hello").expect("pre-create");
+        let app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        let (_, right) = app.status_line(80);
+        assert!(right.contains("Plain text"), "right: {right}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_line_shows_plain_text_for_untitled() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.status.clear();
+        let (_, right) = app.status_line(80);
+        assert!(right.contains("Plain text"), "right: {right}");
+    }
+
+    #[test]
+    fn status_line_truncates_long_filename_with_ellipsis() {
+        let dir = temp_dir("trunc");
+        let long_name = "a".repeat(200);
+        let path = dir.join(format!("{long_name}.rs"));
+        std::fs::write(&path, "fn main() {}").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.status.clear();
+        let (left, _) = app.status_line(20);
+        // With a 20-char-wide viewport the left segment must be
+        // shorter than the full (very long) title and must end with ellipsis.
+        assert!(left.len() < 20, "left len: {}", left.len());
+        assert!(left.ends_with("…"), "left should end with ellipsis: {left}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_line_right_side_includes_transient_status() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.status = "Saved".to_string();
+        let (_, right) = app.status_line(80);
+        assert!(right.contains("Saved"), "right: {right}");
+    }
+
+    #[test]
+    fn status_line_right_side_includes_language() {
+        let dir = temp_dir("langright");
+        let path = dir.join("readme.md");
+        std::fs::write(&path, "# Hi").expect("pre-create");
+        let mut app = App::new(vec![Document::from_path(&path).expect("load")], Lang::En);
+        app.status.clear();
+        let (_, right) = app.status_line(80);
+        assert!(right.contains("Markdown"), "right: {right}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_line_spanish_plain_text() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::Es);
+        app.status.clear();
+        let (_, right) = app.status_line(80);
+        assert!(right.contains("Texto sin formato"), "right: {right}");
     }
 }
