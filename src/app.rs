@@ -59,6 +59,8 @@ pub enum PromptKind {
     OpenFile,
     /// Save an untitled document to a new path.
     SaveAs,
+    /// Jump the cursor to a line number.
+    GotoLine,
 }
 
 /// Search options struct, present for future toggles (case-sensitive,
@@ -1005,6 +1007,38 @@ impl App {
         self.open_selected = 0;
     }
 
+    /// Ctrl+G: prompt for a 1-based line number.
+    fn open_goto_line_prompt(&mut self) {
+        self.prompt = Some((PromptKind::GotoLine, String::new()));
+    }
+
+    /// Ctrl+Shift+K: delete the whole current line (VS Code semantics:
+    /// the column is preserved, clamped to the replacement line).
+    fn delete_line(&mut self) {
+        let line = self.cursor_line;
+        let record = if line + 1 < self.doc().line_count() {
+            // Join with the next line: the break disappears with the line.
+            self.doc_mut().delete_range(line, 0, line + 1, 0)
+        } else if line > 0 {
+            // Last line: remove the preceding break instead.
+            let prev_len = self.doc().line_len(line - 1);
+            let cur_len = self.doc().line_len(line);
+            self.doc_mut().delete_range(line - 1, prev_len, line, cur_len)
+        } else {
+            // Only line: clear its content.
+            let cur_len = self.doc().line_len(0);
+            self.doc_mut().delete_range(0, 0, 0, cur_len)
+        };
+        match record {
+            Ok(r) => {
+                self.record_edits(vec![r], false);
+                self.clamp_cursor();
+                self.clamp_scroll();
+            }
+            Err(e) => self.status = i18n::error_message(self.lang, &e),
+        }
+    }
+
     /// Recompute the interactive Ctrl+O list: files in the active
     /// document's directory (cwd when untitled) whose name contains the
     /// typed input, case-insensitively, capped at 50 entries.
@@ -1198,6 +1232,10 @@ impl App {
             (KeyCode::Delete, _, true) => self.cut_selection_or_line(),
             // Ctrl+V / Shift+Insert → paste
             (KeyCode::Char('v' | 'V'), true, _) => self.paste_from_clipboard(),
+            // Ctrl+Shift+K → delete the whole current line
+            (KeyCode::Char('k' | 'K'), true, true) => self.delete_line(),
+            // Ctrl+G → go to line prompt
+            (KeyCode::Char('g' | 'G'), true, _) => self.open_goto_line_prompt(),
             (KeyCode::Char(c), false, _) => {
                 self.clear_selection();
                 self.type_char(c);
@@ -1385,20 +1423,35 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                // The highlighted candidate wins over the raw input.
-                let path = if is_open {
-                    self.open_candidates
-                        .get(self.open_selected)
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| input.clone())
-                } else {
-                    input.clone()
-                };
                 let kind = *kind;
-                self.prompt = None;
-                self.open_candidates.clear();
-                self.open_selected = 0;
-                self.handle_prompt_confirm(&kind, &path);
+                let input_owned = input.clone();
+                match kind {
+                    PromptKind::OpenFile => {
+                        // The highlighted candidate wins over the raw input.
+                        let path = self
+                            .open_candidates
+                            .get(self.open_selected)
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or(input_owned);
+                        self.prompt = None;
+                        self.open_candidates.clear();
+                        self.open_selected = 0;
+                        self.handle_prompt_confirm(&kind, &path);
+                    }
+                    PromptKind::GotoLine => {
+                        // Invalid input keeps the prompt open for correction.
+                        if let Some(n) = input_owned.trim().parse::<usize>().ok().filter(|n| *n >= 1) {
+                            self.prompt = None;
+                            self.cursor_line = (n - 1).min(self.doc().line_count() - 1);
+                            self.clamp_cursor();
+                            self.clamp_scroll();
+                        }
+                    }
+                    PromptKind::SaveAs => {
+                        self.prompt = None;
+                        self.handle_prompt_confirm(&kind, &input_owned);
+                    }
+                }
             }
             KeyCode::Esc => {
                 self.prompt = None;
@@ -1466,6 +1519,8 @@ impl App {
                     }
                 }
             }
+            // GotoLine confirms inline in on_prompt_key and never reaches here.
+            PromptKind::GotoLine => {}
         }
     }
 
@@ -2581,6 +2636,7 @@ impl App {
             let title = match kind {
                 PromptKind::OpenFile => i18n::t(self.lang, Key::OpenFile),
                 PromptKind::SaveAs => i18n::t(self.lang, Key::SaveAs),
+                PromptKind::GotoLine => i18n::t(self.lang, Key::GotoLine),
             };
             let text = format!("{}{input}", title);
             let widget = Paragraph::new(text).style(
@@ -5522,6 +5578,72 @@ mod tests {
         let cell = terminal.backend().buffer().get(1, 6);
         assert_eq!(cell.style().bg, Some(Color::Rgb(0xE2, 0xC0, 0x89)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ============ Line ops + go-to-line ============
+
+    #[test]
+    fn ctrl_shift_k_deletes_the_current_line() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "one
+two
+three");
+        // Position on "two" (typed leaves the cursor at doc end).
+        app.on_key(plain(KeyCode::Up));
+        app.on_key(plain(KeyCode::Home));
+        // Cursor on "two": delete the whole line.
+        app.on_key(ctrl_shift(KeyCode::Char('k')));
+        assert_eq!(app.doc().line_count(), 2);
+        assert_eq!(app.doc().line(1), "three");
+        // Single undo restores the line.
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(1), "two");
+    }
+
+    #[test]
+    fn ctrl_shift_k_on_last_line_joins_with_previous() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "one
+two");
+        app.on_key(ctrl_shift(KeyCode::Char('k')));
+        assert_eq!(app.doc().line_count(), 1);
+        assert_eq!(app.doc().line(0), "one");
+    }
+
+    #[test]
+    fn ctrl_g_moves_cursor_to_line_keeping_column() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "a
+bc
+cdef");
+        // Position at (0,1): doc start, then one right.
+        app.on_key(ctrl(KeyCode::Home));
+        app.on_key(plain(KeyCode::Right));
+        assert_eq!((app.cursor_line, app.cursor_col), (0, 1));
+        app.on_key(ctrl(KeyCode::Char('g')));
+        typed(&mut app, "3");
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.cursor_line, 2);
+        assert_eq!(app.cursor_col, 1, "column must be preserved (clamped)");
+        assert!(app.prompt.is_none());
+    }
+
+    #[test]
+    fn ctrl_g_clamps_beyond_document_and_invalid_keeps_prompt() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "a
+b");
+        app.on_key(ctrl(KeyCode::Char('g')));
+        typed(&mut app, "99");
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.cursor_line, 1, "out-of-range clamps to the last line");
+        // Invalid input keeps the prompt open for correction.
+        app.on_key(ctrl(KeyCode::Char('g')));
+        typed(&mut app, "abc");
+        app.on_key(plain(KeyCode::Enter));
+        assert!(app.prompt.is_some(), "invalid number keeps the prompt open");
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.prompt.is_none());
     }
 
     // ============ T4: clipboard ============

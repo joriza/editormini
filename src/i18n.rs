@@ -124,6 +124,8 @@ pub enum Key {
     ClipboardError,
     /// Hint line for the interactive open-file list.
     OpenListHints,
+    /// Go-to-line prompt title (Ctrl+G).
+    GotoLine,
 }
 
 /// Translate `key` for `lang`.
@@ -257,6 +259,9 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::OpenListHints) => {
             "\u{2191}\u{2193} elegir · Enter abrir · Esc cancelar · tipeá para filtrar"
         }
+        // Go-to-line prompt (Ctrl+G).
+        (Lang::En, Key::GotoLine) => "Go to line: ",
+        (Lang::Es, Key::GotoLine) => "Ir a línea: ",
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg
@@ -328,6 +333,7 @@ mod tests {
         Key::SkippedReadOnly,
         Key::ClipboardError,
         Key::OpenListHints,
+        Key::GotoLine,
     ];
 
     #[test]
