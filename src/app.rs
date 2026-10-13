@@ -1013,8 +1013,33 @@ impl App {
     }
 
     /// Ctrl+Shift+K: delete the whole current line (VS Code semantics:
-    /// the column is preserved, clamped to the replacement line).
+    /// the column is preserved, clamped to the replacement line). With an
+    /// active selection, ALL lines the selection spans are deleted.
     fn delete_line(&mut self) {
+        if let Some(((sl, _), (el, _))) = self.normalized_selection() {
+            let record = if el + 1 < self.doc().line_count() {
+                self.doc_mut().delete_range(sl, 0, el + 1, 0)
+            } else if sl > 0 {
+                let prev_len = self.doc().line_len(sl - 1);
+                let last_len = self.doc().line_len(el);
+                self.doc_mut().delete_range(sl - 1, prev_len, el, last_len)
+            } else {
+                // The selection covers every line: clear the document.
+                let last_len = self.doc().line_len(el);
+                self.doc_mut().delete_range(sl, 0, el, last_len)
+            };
+            match record {
+                Ok(r) => {
+                    self.record_edits(vec![r], false);
+                    self.clear_selection();
+                    self.cursor_line = sl.min(self.doc().line_count().saturating_sub(1));
+                    self.clamp_cursor();
+                    self.clamp_scroll();
+                }
+                Err(e) => self.status = i18n::error_message(self.lang, &e),
+            }
+            return;
+        }
         let line = self.cursor_line;
         let record = if line + 1 < self.doc().line_count() {
             // Join with the next line: the break disappears with the line.
@@ -1023,7 +1048,8 @@ impl App {
             // Last line: remove the preceding break instead.
             let prev_len = self.doc().line_len(line - 1);
             let cur_len = self.doc().line_len(line);
-            self.doc_mut().delete_range(line - 1, prev_len, line, cur_len)
+            self.doc_mut()
+                .delete_range(line - 1, prev_len, line, cur_len)
         } else {
             // Only line: clear its content.
             let cur_len = self.doc().line_len(0);
@@ -1043,15 +1069,14 @@ impl App {
     /// one position up/down. The selection (and cursor) travel with the
     /// block; the whole move is ONE undo step.
     fn move_lines(&mut self, delta: isize) {
-        let (block_start, block_end, sel_cols) =
-            if let Some(((sl, sc), (el, ec))) = self
-                .normalized_selection()
-                .filter(|((sl, sc), (el, ec))| sl != el || sc != ec)
-            {
-                (sl, el, Some((sc, ec)))
-            } else {
-                (self.cursor_line, self.cursor_line, None)
-            };
+        let (block_start, block_end, sel_cols) = if let Some(((sl, sc), (el, ec))) = self
+            .normalized_selection()
+            .filter(|((sl, sc), (el, ec))| sl != el || sc != ec)
+        {
+            (sl, el, Some((sc, ec)))
+        } else {
+            (self.cursor_line, self.cursor_line, None)
+        };
         if !self.move_line_block(block_start, block_end, delta) {
             return;
         }
@@ -1105,7 +1130,10 @@ impl App {
             // After the deletion the line that followed the block sits at
             // index s: append the block after it.
             let insert_col = self.doc().line_len(s);
-            if let Ok(r) = self.doc_mut().insert(s, insert_col, &format!("\n{block_text}")) {
+            if let Ok(r) = self
+                .doc_mut()
+                .insert(s, insert_col, &format!("\n{block_text}"))
+            {
                 records.push(r);
             }
         }
@@ -1351,7 +1379,9 @@ impl App {
             (KeyCode::Right, true, _) => self.move_word_right(),
             // Alt+Up/Down → move the current line (or the selected block)
             (KeyCode::Up, _, _) if key.modifiers.contains(KeyModifiers::ALT) => self.move_lines(-1),
-            (KeyCode::Down, _, _) if key.modifiers.contains(KeyModifiers::ALT) => self.move_lines(1),
+            (KeyCode::Down, _, _) if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.move_lines(1)
+            }
             // Shift+Left/Right/Up/Down/Home/End/PageUp/PageDown → selection
             (KeyCode::Left, _, true) => self.shift_left(),
             (KeyCode::Right, _, true) => self.shift_right(),
@@ -1519,7 +1549,9 @@ impl App {
                     }
                     PromptKind::GotoLine => {
                         // Invalid input keeps the prompt open for correction.
-                        if let Some(n) = input_owned.trim().parse::<usize>().ok().filter(|n| *n >= 1) {
+                        if let Some(n) =
+                            input_owned.trim().parse::<usize>().ok().filter(|n| *n >= 1)
+                        {
                             self.prompt = None;
                             self.cursor_line = (n - 1).min(self.doc().line_count() - 1);
                             self.clamp_cursor();
@@ -5557,6 +5589,41 @@ mod tests {
         assert_eq!(app.cursor_col, 6);
     }
 
+    #[test]
+    fn ctrl_shift_k_works_with_uppercase_k_delivery() {
+        // Windows terminals deliver Ctrl+Shift+K as Char('K').
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "one\ntwo\nthree");
+        app.on_key(plain(KeyCode::Up));
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(press(
+            KeyCode::Char('K'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert_eq!(app.doc().line_count(), 2);
+        assert_eq!(app.doc().line(1), "three");
+    }
+
+    #[test]
+    fn ctrl_shift_k_with_selection_deletes_all_selected_lines() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "one\ntwo\nthree\nfour");
+        app.on_key(ctrl(KeyCode::Home));
+        app.on_key(shift(KeyCode::Down));
+        app.on_key(shift(KeyCode::Down));
+        // Selection spans lines 0-2: delete ALL of them.
+        app.on_key(press(
+            KeyCode::Char('K'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert_eq!(app.doc().line_count(), 1);
+        assert_eq!(app.doc().line(0), "four");
+        assert!(app.normalized_selection().is_none());
+        // One undo restores everything.
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line_count(), 4);
+    }
+
     // ============ T5: interactive open list ============
 
     #[test]
@@ -5668,9 +5735,12 @@ mod tests {
     #[test]
     fn ctrl_shift_k_deletes_the_current_line() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
-        typed(&mut app, "one
+        typed(
+            &mut app,
+            "one
 two
-three");
+three",
+        );
         // Position on "two" (typed leaves the cursor at doc end).
         app.on_key(plain(KeyCode::Up));
         app.on_key(plain(KeyCode::Home));
@@ -5686,8 +5756,10 @@ three");
     #[test]
     fn ctrl_shift_k_on_last_line_joins_with_previous() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
-        typed(&mut app, "one
-two");
+        typed(
+            &mut app, "one
+two",
+        );
         app.on_key(ctrl_shift(KeyCode::Char('k')));
         assert_eq!(app.doc().line_count(), 1);
         assert_eq!(app.doc().line(0), "one");
@@ -5696,9 +5768,12 @@ two");
     #[test]
     fn ctrl_g_moves_cursor_to_line_keeping_column() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
-        typed(&mut app, "a
+        typed(
+            &mut app,
+            "a
 bc
-cdef");
+cdef",
+        );
         // Position at (0,1): doc start, then one right.
         app.on_key(ctrl(KeyCode::Home));
         app.on_key(plain(KeyCode::Right));
@@ -5714,8 +5789,10 @@ cdef");
     #[test]
     fn ctrl_g_clamps_beyond_document_and_invalid_keeps_prompt() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
-        typed(&mut app, "a
-b");
+        typed(
+            &mut app, "a
+b",
+        );
         app.on_key(ctrl(KeyCode::Char('g')));
         typed(&mut app, "99");
         app.on_key(plain(KeyCode::Enter));
@@ -5777,18 +5854,36 @@ b");
     #[test]
     fn scratch_alt_down_trace() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
-        typed(&mut app, "alpha
+        typed(
+            &mut app,
+            "alpha
 beta
-gamma");
+gamma",
+        );
         app.on_key(ctrl(KeyCode::Home));
         app.on_key(plain(KeyCode::Down));
         app.on_key(alt(KeyCode::Down));
-        println!("AFTER  lines={:?}", (0..app.doc().line_count()).map(|i| app.doc().line(i).to_string()).collect::<Vec<_>>());
+        println!(
+            "AFTER  lines={:?}",
+            (0..app.doc().line_count())
+                .map(|i| app.doc().line(i).to_string())
+                .collect::<Vec<_>>()
+        );
         println!("AFTER  undo_stack={}", app.histories[0].undo.len());
         app.on_key(ctrl(KeyCode::Char('z')));
-        println!("UNDONE lines={:?}", (0..app.doc().line_count()).map(|i| app.doc().line(i).to_string()).collect::<Vec<_>>());
+        println!(
+            "UNDONE lines={:?}",
+            (0..app.doc().line_count())
+                .map(|i| app.doc().line(i).to_string())
+                .collect::<Vec<_>>()
+        );
         app.on_key(ctrl(KeyCode::Char('y')));
-        println!("REDONE lines={:?}", (0..app.doc().line_count()).map(|i| app.doc().line(i).to_string()).collect::<Vec<_>>());
+        println!(
+            "REDONE lines={:?}",
+            (0..app.doc().line_count())
+                .map(|i| app.doc().line(i).to_string())
+                .collect::<Vec<_>>()
+        );
     }
 
     // ============ T4: clipboard ============
