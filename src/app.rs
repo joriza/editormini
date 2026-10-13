@@ -1339,8 +1339,9 @@ impl App {
             (KeyCode::Delete, _, true) => self.cut_selection_or_line(),
             // Ctrl+V / Shift+Insert → paste
             (KeyCode::Char('v' | 'V'), true, _) => self.paste_from_clipboard(),
-            // Ctrl+Shift+K → delete the whole current line
-            (KeyCode::Char('k' | 'K'), true, true) => self.delete_line(),
+            // Ctrl+K (Shift accepted but not required — the owner's
+            // terminal mangles the Ctrl+Shift+K delivery) → delete line
+            (KeyCode::Char('k' | 'K'), true, _) => self.delete_line(),
             // Ctrl+G → go to line prompt
             (KeyCode::Char('g' | 'G'), true, _) => self.open_goto_line_prompt(),
             (KeyCode::Char(c), false, _) => {
@@ -5633,9 +5634,12 @@ mod tests {
         // Ctrl+Shift+K (it then arrives as a plain typed K); F8 is the
         // fallback that always works, like F2/F3/F5/F6 precedents.
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
-        typed(&mut app, "one
+        typed(
+            &mut app,
+            "one
 two
-three");
+three",
+        );
         app.on_key(plain(KeyCode::Up));
         app.on_key(plain(KeyCode::Home));
         app.on_key(plain(KeyCode::F(8)));
