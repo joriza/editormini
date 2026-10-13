@@ -1303,6 +1303,9 @@ impl App {
             (KeyCode::F(2), _, _) => self.save_active(),
             // F3 → save all (fallback for Ctrl+Shift+S on Windows)
             (KeyCode::F(3), _, _) => self.save_all(),
+            // F8 → delete the current line (fallback for Ctrl+Shift+K when
+            // the terminal/PTY strips the modifiers)
+            (KeyCode::F(8), _, _) => self.delete_line(),
             // Ctrl+O → open file prompt
             (KeyCode::Char('o' | 'O'), true, _) => self.open_file_prompt(),
             (KeyCode::Char('f' | 'F'), true, _) => self.open_search(),
@@ -5622,6 +5625,24 @@ mod tests {
         // One undo restores everything.
         app.on_key(ctrl(KeyCode::Char('z')));
         assert_eq!(app.doc().line_count(), 4);
+    }
+
+    #[test]
+    fn f8_deletes_the_current_line_as_fallback() {
+        // Terminals/PTY bridges can strip the Ctrl+Shift modifiers from
+        // Ctrl+Shift+K (it then arrives as a plain typed K); F8 is the
+        // fallback that always works, like F2/F3/F5/F6 precedents.
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "one
+two
+three");
+        app.on_key(plain(KeyCode::Up));
+        app.on_key(plain(KeyCode::Home));
+        app.on_key(plain(KeyCode::F(8)));
+        assert_eq!(app.doc().line_count(), 2);
+        assert_eq!(app.doc().line(1), "three");
+        app.on_key(ctrl(KeyCode::Char('z')));
+        assert_eq!(app.doc().line(1), "two");
     }
 
     // ============ T5: interactive open list ============
