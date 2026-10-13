@@ -40,6 +40,7 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | `Ctrl+1` | ir al último documento del panel 1 (`Ctrl+2` reservada para el panel 2) |
 | `Ctrl+Z` / `Ctrl+Y` | deshacer / rehacer (historial acotado por pestaña; cada tanda de tipeo es un paso) |
 | `F3` / `Ctrl+Shift+S` | guardar todo (pestañas con ruta; omite sin título) — fuera del diálogo de búsqueda |
+| `Alt+↑` / `Alt+↓` | mover la línea del cursor una posición arriba/abajo (con selección activa mueve todo el bloque seleccionado; la selección viaja con él) |
 | `Ctrl+Shift+K` | eliminar la línea completa del cursor (la columna se conserva en la línea que la reemplaza) |
 | `Ctrl+G` | ir a línea: número de línea destino (`Enter` salta, `Esc` cancela; fuera de rango se ajusta a la última línea) |
 | `Ctrl+O` | abrir archivo: ventana con borde y lista de los archivos del directorio del documento activo — tipeá para filtrar, `↑`/`↓` elegís, `Enter` abre, `Esc` cancela (también acepta escribir una ruta directamente) |
