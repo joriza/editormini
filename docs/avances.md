@@ -7,7 +7,7 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 - **Hito 2: completo** — paleta de comandos (`Ctrl+Shift+P`/`F4`) con búsqueda difusa sobre un registro localizado de 19 comandos, y quick open (`Ctrl+P`) sobre pestañas abiertas + directorio activo; la ruta tipeada como respaldo. T1–T4 del feature doc con RED→GREEN observado por tarea.
 - **Hito 1: completo** — las 11 tareas del documento terminadas y verificadas por el dueño (tipeo, guardado, ciclo de archivos, mouse, barra de estado, exe portable), más el gutter de números de línea como unidad adicional.
 - **Sobre la base del hito**, entregado y probado: búsqueda/reemplazo en documento activo y cruzado (`Ctrl+F/H`, `Ctrl+Shift+F/H`), selección con portapapeles del sistema y movimientos VS Code, operaciones de línea (`Alt+↑/↓`, `Ctrl+K` con respaldo `F8`, `Ctrl+G`), lista interactiva de apertura (`Ctrl+O`) y sello de compilación en la barra de estado.
-- **Verificación**: 234 tests, build con 0 warnings.
+- **Verificación**: 236 tests, build con 0 warnings.
 - **Siguiente**: Hito 3 — explorador lateral (ver [plan.md](plan.md)).
 
 ## Cronología
@@ -36,6 +36,7 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 | 2026-10-12 | — | Pulido de legibilidad — la ayuda inicial de la barra de estado deja de listar `Ctrl+Z deshacer` (obvia, igual que buscar, que nunca se listó; `--help` de CLI conserva la referencia completa). Texto del diálogo de búsqueda/reemplazo oscurecido: título/query/contador y hints pasan de grises al `prompt_fg` negro (hints con DIM) — el gris claro sobre fondo ámbar no se leía; 2 tests nuevos | 156 tests; build 0 warnings |
 | 2026-10-12 | — | Tareas 3+4/4 — Ctrl+Shift+F búsqueda cruzada en todos los docs (itera en orden de pestañas, cambia de pestaña al cruzar límites, contador global con título de doc, Esc restaura pestaña de inicio si no se navegó); Ctrl+Shift+H reemplazo cruzado (reemplaza actual y avanza cambiando pestañas, reemplazar todo con confirmación única muestra total de ocurrencias y número de archivos, docs solo-lectura se omiten, deshacer por pestaña); 13 tests nuevos (aserciones en memoria: el reemplazo no auto-guarda, el guardado es explícito); 3 tests corregidos para asertar buffers en vez de archivos no guardados | 151 tests; build 0 warnings |
 | 2026-10-15 | `f3e552d`…`4c99520` | **Hito 2 completo** — matcher difuso propio (tanda +2, contigüidad +5, inicio de palabra +6, hueco −1), registro de 19 comandos localizados EN/ES (`src/command.rs`), paleta `Ctrl+Shift+P`/F4 con popup flotante superior (fila de consulta + entradas rankeadas + Sin coincidencias), quick open `Ctrl+P` (pestañas primero, luego archivos del directorio activo no abiertos; ruta tipeada como respaldo); T1–T4 test-first con RED observado por tarea; detalle en `odd/tasks/milestone-2-command-palette.md` | 234 tests; build 0 warnings |
+| 2026-10-15 | fix round + `e725c86` | Verificación independiente del hito (agente externo): 2 blockers reales encontrados y corregidos RED→GREEN — B1: quick open panicaba con pestaña sin título (desync labels/entries; estado de arranque por defecto, no cubierto por los tests originales); B2: el popup panicaba en terminales < 30 columnas (u16 clamp min>max). 2 tests de regresión nuevos | 236 tests; build 0 warnings |
 
 ## Reordenamientos decididos
 

@@ -6,7 +6,7 @@ Editor de texto para terminal (TUI) con la **forma de uso de Visual Studio Code*
 
 ## Estado del proyecto
 
-- **Versión completada — v0.1.0 (Hito 1 + extensiones)**: editor base con pestañas, resaltado por extensión, i18n EN/ES, búsqueda/reemplazo (documento activo y cruzado), selección con portapapeles del sistema y movimientos VS Code, operaciones de línea, mouse, gutter de números de línea y exe portable. **211 tests verdes, build con 0 warnings.** Detalle: [avances.md](docs/avances.md).
+- **Versión completada — v0.1.0 (Hito 1 + extensiones)**: editor base con pestañas, resaltado por extensión, i18n EN/ES, búsqueda/reemplazo (documento activo y cruzado), selección con portapapeles del sistema y movimientos VS Code, operaciones de línea, paleta de comandos y quick open, mouse, gutter de números de línea y exe portable. **236 tests verdes, build con 0 warnings.** Detalle: [avances.md](docs/avances.md).
 - **Versión en progreso — Hito 2 (planificado, aún sin código)**: paleta de comandos (`Ctrl+Shift+P`) y apertura difusa de archivos (`Ctrl+P`). Ruta completa: [plan.md](docs/plan.md).
 
 **Especificación:** [specifications.md](docs/specifications.md) — comportamiento completo, modelo de datos e i18n, agnóstico del lenguaje (referencia para una futura app hermana). Complementos: [hallazgos.md](docs/hallazgos.md) (decisiones con dato y defectos) y [métricas y estimación](docs/metricas-y-estimacion.md).

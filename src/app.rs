@@ -1731,7 +1731,15 @@ impl App {
                     .collect()
             }
             PaletteKind::QuickOpen => {
-                let titles: Vec<String> = (0..self.docs.len()).map(|i| self.doc_title(i)).collect();
+                // Labels and entries are built in LOCKSTEP: every open doc
+                // gets a Tab entry (untitled included), then unopened dir
+                // files — one label per entry, same order, equal lengths.
+                let mut labels: Vec<String> = Vec::new();
+                let mut source: Vec<PaletteEntry> = Vec::new();
+                for i in 0..self.docs.len() {
+                    labels.push(self.doc_title(i));
+                    source.push(PaletteEntry::Tab(i));
+                }
                 let open_paths: Vec<PathBuf> = self
                     .docs
                     .iter()
@@ -1742,9 +1750,6 @@ impl App {
                     .path()
                     .and_then(|p| p.parent().map(|p| p.to_path_buf()))
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                let mut labels: Vec<String> = titles;
-                let mut source: Vec<PaletteEntry> =
-                    (0..open_paths.len()).map(PaletteEntry::Tab).collect();
                 for path in App::compute_open_candidates(&dir, "") {
                     if open_paths.contains(&path) {
                         continue;
@@ -2688,7 +2693,7 @@ impl App {
             .max()
             .unwrap_or(0)
             .max(query.chars().count() + 2);
-        let width = (longest as u16 + 10).clamp(30, editor_area.width);
+        let width = (longest as u16 + 10).max(30).min(editor_area.width);
         let rows = if entries.is_empty() { 2 } else { 1 + visible }; // input + entries (or No matches)
         let height = (rows as u16 + 2).min(editor_area.height);
         let x = editor_area.x + editor_area.width.saturating_sub(width) / 2;
@@ -6546,5 +6551,37 @@ gamma",
             .to_string_lossy()
             .into_owned();
         assert!(last.ends_with("qq9"), "new tab uses the typed path: {last}");
+    }
+
+    #[test]
+    fn quick_open_survives_an_untitled_tab_and_tabs_address_real_docs() {
+        // B1 regression: labels and sources must stay in lockstep when an
+        // open tab has no path (the app's default startup state).
+        let dir = temp_dir("quick_open_untitled");
+        let a = dir.join("a.txt");
+        std::fs::write(&a, "a").expect("write");
+        let mut app = App::new(
+            vec![Document::new_untitled(), Document::new_with_path(&a)],
+            Lang::En,
+        );
+        app.on_key(ctrl(KeyCode::Char('p'))); // empty query ranks ALL labels
+        assert!(app.palette.is_some());
+        for entry in &app.palette.as_ref().unwrap().entries {
+            if let PaletteEntry::Tab(i) = entry {
+                assert!(*i < app.docs.len(), "Tab index must address a real doc");
+            }
+        }
+    }
+
+    #[test]
+    fn palette_popup_fits_a_narrow_terminal_without_panicking() {
+        // B2 regression: u16::clamp panics when min > max; the popup must
+        // degrade gracefully below its preferred width (20 columns here).
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(20, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        app.on_key(ctrl_shift(KeyCode::Char('p')));
+        terminal.draw(|f| app.draw(f)).unwrap(); // must not panic at width 20
     }
 }

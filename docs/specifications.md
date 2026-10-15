@@ -197,7 +197,7 @@ Política: archivo ausente → valores por defecto; archivo malformado → error
 
 ## 13. Criterios de calidad
 
-1. Suite de tests automatizados verde (211 tests al cierre del hito 1 y sus extensiones: modelo, keymap, i18n, config, temas, resaltado, búsqueda/reemplazo, selección/portapapeles, mouse).
+1. Suite de tests automatizados verde (236 tests al cierre del hito 2: modelo, keymap, i18n, config, temas, resaltado, búsqueda/reemplazo, selección/portapapeles, mouse, paleta y quick open).
 2. Compilación con **cero warnings**.
 3. i18n completo garantizado por compilación.
 4. Un commit de trabajo por tarea, mensajes convencionales, evidencia registrada.
