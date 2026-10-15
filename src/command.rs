@@ -3,9 +3,6 @@
 //! One entry per user-actionable command, each labelled through i18n so the
 //! palette speaks the UI language. Milestone 4 turns the keymap into a
 //! remappable table over this registry.
-// TODO(hito-2/T3): remove this allow once App executes commands — until
-// then nothing in the binary consumes the registry.
-#![allow(dead_code)]
 
 use crate::i18n::Key;
 

@@ -3,9 +3,6 @@
 //! Zero dependencies on purpose: a case-insensitive subsequence test with a
 //! light score (contiguity, word-start bonus, gap penalty) is enough to feel
 //! like VS Code's pickers without pulling a fuzzy crate.
-// TODO(hito-2/T3): remove this allow once the palette wiring consumes the
-// module — until then the binary never calls it and dead_code fires.
-#![allow(dead_code)]
 
 /// Score how well `query` matches `text` as a case-insensitive subsequence.
 ///
