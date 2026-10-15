@@ -214,13 +214,6 @@ Anotar como funcionalidades a agregar cuando sea el momento adecuado:
 Consulta. Como se Abre el segundo panel?
 Consulta. El readme indica que lenguajes soporta resaltado de colores? Recuerdeme por pantalla cuales son actualmente.
 
- Tu cola de revisión (actualizada)
- 1. Nuevo — probar la paleta: Ctrl+Shift+P (o F4), filtrá tipeando, Enter ejecuta; Ctrl+P quick open (pestañas primero, luego archivos del directorio; ruta tipeada si no hay
-    candidatos).
- 2. Pendientes previos: colores Dark+ (tarea 6), i18n EN/ES (tarea 7), búsqueda cruzada Ctrl+Shift+F/H, exe portable en máquina limpia.
- 3. Decisiones: LICENSE (MIT declarado, sin archivo), archivos scratch ya publicados.
-
-----
 
 Revisiones.
 1. Colores del resaltado Dark+: abrir .rs, .md, .json y validar la paleta
@@ -230,5 +223,27 @@ Solo .md no muestra el codigo de colores como lo hace visual code
 2. Funciona reemplazo de todos los documentos activos.
 3. En las pocas maquinas que no ha funcionado no he podido determinar la causa, luego pasaré reporte de equipo que entreca cpu-z para ver si aporta datos suficiente.
 4. (Opcional) El diff de docs recién pusheado (4f80b3d..a41a1e1)   No entendí cual es esta funcionalidad para verificarla.
+
+
+ Tu cola de revisión (actualizada)
+ 1. Nuevo — probar la paleta: Ctrl+Shift+P (o F4), filtrá tipeando, Enter ejecuta; Ctrl+P quick open (pestañas primero, luego archivos del directorio; ruta tipeada si no hay
+    candidatos).
+ 2. Pendientes previos: colores Dark+ (tarea 6), i18n EN/ES (tarea 7), búsqueda cruzada Ctrl+Shift+F/H, exe portable en máquina limpia.
+ 3. Decisiones: LICENSE (MIT declarado, sin archivo), archivos scratch ya publicados.
+
+
+.md ahora muestra con colores
+No comprendo que es el menu Ctrl+Shift+P tampoco se como salir de el luego de que ingreso en una de las opciones.
+
+----
+
+Qué tiene esta build respecto a la que estabas probando:
+- Rótulos de la paleta y quick open legibles (antes gris tenue) y con la salida explícita: ↑↓ elegir · Enter ejecutar · Esc salir · tipeá para filtrar — en español si usás --lang es o
+  la config.
+- Mismo criterio en el popup de Ctrl+O.
+- Los colores de .md que ya confirmaste siguen, claro.
+Para probar la paleta con calma: Ctrl+Shift+P → tipeá save o line → mirá cómo filtra → Esc para salir sin ejecutar → volvé a entrar y ejecutá algo con Enter. Doble uso y el concepto
+queda claro.
+
 
 
