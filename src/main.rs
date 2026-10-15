@@ -6,6 +6,7 @@
 mod app;
 mod config;
 mod document;
+mod fuzzy;
 mod highlight;
 mod i18n;
 mod pane;
