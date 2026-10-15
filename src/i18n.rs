@@ -166,6 +166,8 @@ pub enum Key {
     CmdLastDocPanel1,
     /// Command palette hint line (popup title).
     PaletteHints,
+    /// Quick-open picker hint line (popup title).
+    QuickOpenHints,
 }
 
 /// Translate `key` for `lang`.
@@ -350,6 +352,13 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::PaletteHints) => {
             "\u{2191}\u{2193} elegir \u{b7} Enter ejecutar \u{b7} Esc cancelar \u{b7} tipeá para filtrar"
         }
+        // Quick-open popup hint (title of the bordered popup).
+        (Lang::En, Key::QuickOpenHints) => {
+            "\u{2191}\u{2193} pick \u{b7} Enter open \u{b7} Esc cancel \u{b7} type to filter"
+        }
+        (Lang::Es, Key::QuickOpenHints) => {
+            "\u{2191}\u{2193} elegir \u{b7} Enter abrir \u{b7} Esc cancelar \u{b7} tipeá para filtrar"
+        }
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg
@@ -442,6 +451,7 @@ mod tests {
         Key::CmdPrevTab,
         Key::CmdLastDocPanel1,
         Key::PaletteHints,
+        Key::QuickOpenHints,
     ];
 
     #[test]

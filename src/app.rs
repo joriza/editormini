@@ -78,23 +78,25 @@ pub struct SearchOptions {
 pub enum PaletteKind {
     /// Command palette (Ctrl+Shift+P / F4).
     Command,
-    /// Quick-open file picker (Ctrl+P) — wired by milestone 2 T4.
-    #[allow(dead_code)]
+    /// Quick-open file picker (Ctrl+P).
     QuickOpen,
 }
 
 /// One selectable row of the palette.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum PaletteEntry {
     /// A registry command to execute.
     Command(Command),
+    /// An already-open tab to focus.
+    Tab(usize),
+    /// A file on disk to open as a new tab.
+    File(PathBuf),
 }
 
 /// Command palette / quick-open modal state (milestone 2).
 #[derive(Debug)]
 pub struct PaletteState {
     /// What the palette lists.
-    #[allow(dead_code)] // TODO(hito-2/T4): read once QuickOpen wiring lands.
     pub kind: PaletteKind,
     /// Typed filter text.
     pub query: String,
@@ -105,28 +107,15 @@ pub struct PaletteState {
 }
 
 impl PaletteState {
-    /// Open a fresh palette of `kind` with an empty query.
-    pub fn new(kind: PaletteKind, lang: Lang) -> Self {
-        let mut state = Self {
+    /// Open a fresh palette of `kind` with an empty query. Entries are
+    /// filled by `App::refresh_palette`, which knows the tab/dir context.
+    pub fn new(kind: PaletteKind) -> Self {
+        Self {
             kind,
             query: String::new(),
             entries: Vec::new(),
             selected: 0,
-        };
-        state.refresh(lang);
-        state
-    }
-
-    /// Recompute `entries` for the current query: rank the registry labels
-    /// through the fuzzy matcher, best first, and reset the highlight.
-    fn refresh(&mut self, lang: Lang) {
-        let source = all_commands();
-        let labels: Vec<&'static str> = source.iter().map(|c| i18n::t(lang, c.label_key)).collect();
-        self.entries = fuzzy::rank(&self.query, labels)
-            .into_iter()
-            .map(|(i, _)| PaletteEntry::Command(source[i]))
-            .collect();
-        self.selected = 0;
+        }
     }
 }
 
@@ -1380,6 +1369,8 @@ impl App {
             // F4 → command palette (terminal-proof fallback; F2/F3/F5/F6/F8
             // precedent)
             (KeyCode::F(4), _, _) => self.open_palette(),
+            // Ctrl+P → quick-open fuzzy picker
+            (KeyCode::Char('p' | 'P'), true, _) => self.open_quick_open(),
             // Ctrl+O → open file prompt
             (KeyCode::Char('o' | 'O'), true, _) => self.open_file_prompt(),
             (KeyCode::Char('f' | 'F'), true, _) => self.open_search(),
@@ -1708,7 +1699,72 @@ impl App {
     /// Open the command palette (Ctrl+Shift+P, F4 fallback). Only reachable
     /// from the main key dispatch, so it never fights another modal.
     fn open_palette(&mut self) {
-        self.palette = Some(PaletteState::new(PaletteKind::Command, self.lang));
+        self.palette = Some(PaletteState::new(PaletteKind::Command));
+        self.refresh_palette();
+    }
+
+    /// Open the quick-open picker (Ctrl+P): open tabs first, then the files
+    /// of the active document's directory that are not already open.
+    fn open_quick_open(&mut self) {
+        self.palette = Some(PaletteState::new(PaletteKind::QuickOpen));
+        self.refresh_palette();
+    }
+
+    /// Recompute palette entries for the current query: commands rank by
+    /// their localized label; quick-open ranks open-tab titles first and
+    /// then the candidate files of the active document's directory.
+    fn refresh_palette(&mut self) {
+        let Some(mut state) = self.palette.take() else {
+            return;
+        };
+        let query = state.query.clone();
+        state.entries = match state.kind {
+            PaletteKind::Command => {
+                let source = all_commands();
+                let labels: Vec<&'static str> = source
+                    .iter()
+                    .map(|c| i18n::t(self.lang, c.label_key))
+                    .collect();
+                fuzzy::rank(&query, labels)
+                    .into_iter()
+                    .map(|(i, _)| PaletteEntry::Command(source[i]))
+                    .collect()
+            }
+            PaletteKind::QuickOpen => {
+                let titles: Vec<String> = (0..self.docs.len()).map(|i| self.doc_title(i)).collect();
+                let open_paths: Vec<PathBuf> = self
+                    .docs
+                    .iter()
+                    .filter_map(|d| d.path().map(|p| p.to_path_buf()))
+                    .collect();
+                let dir = self
+                    .doc()
+                    .path()
+                    .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                let mut labels: Vec<String> = titles;
+                let mut source: Vec<PaletteEntry> =
+                    (0..open_paths.len()).map(PaletteEntry::Tab).collect();
+                for path in App::compute_open_candidates(&dir, "") {
+                    if open_paths.contains(&path) {
+                        continue;
+                    }
+                    labels.push(
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default(),
+                    );
+                    source.push(PaletteEntry::File(path));
+                }
+                let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+                fuzzy::rank(&query, refs)
+                    .into_iter()
+                    .map(|(i, _)| source[i].clone())
+                    .collect()
+            }
+        };
+        state.selected = 0;
+        self.palette = Some(state);
     }
 
     /// Handle keys while the palette is open: type to filter, ↑/↓ to pick,
@@ -1736,23 +1792,36 @@ impl App {
                 let Some(palette) = self.palette.take() else {
                     return;
                 };
-                if let Some(PaletteEntry::Command(command)) = palette.entries.get(palette.selected)
-                {
-                    let kind = command.kind;
-                    self.execute_command(kind);
+                match palette.entries.get(palette.selected) {
+                    Some(PaletteEntry::Command(command)) => {
+                        let kind = command.kind;
+                        self.execute_command(kind);
+                    }
+                    Some(PaletteEntry::Tab(index)) => self.switch_to(*index),
+                    Some(PaletteEntry::File(path)) => {
+                        let path = path.to_string_lossy().into_owned();
+                        self.handle_prompt_confirm(&PromptKind::OpenFile, &path);
+                    }
+                    // No candidates: the query is a typed path (Ctrl+O
+                    // accepts direct paths; quick-open inherits that).
+                    None if !palette.query.trim().is_empty() => {
+                        let path = palette.query.trim().to_string();
+                        self.handle_prompt_confirm(&PromptKind::OpenFile, &path);
+                    }
+                    None => {}
                 }
             }
             KeyCode::Backspace => {
                 if let Some(palette) = self.palette.as_mut() {
                     palette.query.pop();
-                    palette.refresh(self.lang);
                 }
+                self.refresh_palette();
             }
             KeyCode::Char(c) if !ctrl && !alt => {
                 if let Some(palette) = self.palette.as_mut() {
                     palette.query.push(c);
-                    palette.refresh(self.lang);
                 }
+                self.refresh_palette();
             }
             _ => {}
         }
@@ -2593,11 +2662,20 @@ impl App {
         let lang = self.lang;
         let query = palette.query.clone();
         let selected = palette.selected;
+        let hints = match palette.kind {
+            PaletteKind::Command => i18n::t(lang, Key::PaletteHints),
+            PaletteKind::QuickOpen => i18n::t(lang, Key::QuickOpenHints),
+        };
         let entries: Vec<String> = palette
             .entries
             .iter()
             .map(|entry| match entry {
                 PaletteEntry::Command(command) => i18n::t(lang, command.label_key).to_string(),
+                PaletteEntry::Tab(index) => self.doc_title(*index),
+                PaletteEntry::File(path) => path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
             })
             .collect();
         let visible = entries.len().clamp(1, 7);
@@ -2653,7 +2731,7 @@ impl App {
             .borders(Borders::ALL)
             .border_style(Style::new().fg(self.theme.accent))
             .title(Span::styled(
-                i18n::t(lang, Key::PaletteHints),
+                hints,
                 Style::new()
                     .fg(self.theme.line_number_fg)
                     .add_modifier(Modifier::DIM),
@@ -6238,6 +6316,11 @@ gamma",
             .iter()
             .map(|entry| match entry {
                 PaletteEntry::Command(command) => i18n::t(app.lang, command.label_key).to_string(),
+                PaletteEntry::Tab(index) => app.doc_title(*index),
+                PaletteEntry::File(path) => path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
             })
             .collect()
     }
@@ -6368,5 +6451,100 @@ gamma",
         }
         assert!(frame.contains("> sv"), "input row must echo the query");
         assert!(frame.contains("File: Save"), "entries must render");
+    }
+
+    // ---- Milestone 2 T4: quick open (Ctrl+P) ----
+
+    #[test]
+    fn ctrl_p_lists_open_tabs_first_then_unopened_dir_files() {
+        let dir = temp_dir("quick_open_list");
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        let c = dir.join("c.txt");
+        std::fs::write(&a, "a").expect("write");
+        std::fs::write(&b, "b").expect("write");
+        std::fs::write(&c, "c").expect("write");
+        // Two open tabs (a, b); c.txt exists only on disk.
+        let mut app = App::new(
+            vec![Document::new_with_path(&a), Document::new_with_path(&b)],
+            Lang::En,
+        );
+        app.on_key(ctrl(KeyCode::Char('p')));
+        let labels = palette_labels(&app);
+        assert_eq!(labels.len(), 3, "2 tabs + 1 unopened file: {labels:?}");
+        assert!(labels[0].contains("a.txt"), "tabs first: {labels:?}");
+        assert!(labels[1].contains("b.txt"));
+        assert!(
+            labels[2].contains("c.txt"),
+            "unopened file last: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn quick_open_enter_on_file_opens_it_as_a_tab() {
+        let dir = temp_dir("quick_open_file");
+        let a = dir.join("a.txt");
+        let c = dir.join("c.txt");
+        std::fs::write(&a, "a").expect("write");
+        std::fs::write(&c, "c").expect("write");
+        let mut app = App::new(vec![Document::new_with_path(&a)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('p')));
+        for ch in "c.".chars() {
+            app.on_key(plain(KeyCode::Char(ch)));
+        }
+        let before = app.docs.len();
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.docs.len(), before + 1, "file opens as a new tab");
+        assert_eq!(app.active, before, "opened file focuses its tab");
+        assert!(app.status.contains("Opened"), "status: {}", app.status);
+        assert!(app.palette.is_none(), "palette closes after opening");
+    }
+
+    #[test]
+    fn quick_open_enter_on_tab_switches_to_it() {
+        let dir = temp_dir("quick_open_tab");
+        let a = dir.join("alpha.md");
+        let b = dir.join("beta.md");
+        std::fs::write(&a, "a").expect("write");
+        std::fs::write(&b, "b").expect("write");
+        let mut app = App::new(
+            vec![Document::new_with_path(&a), Document::new_with_path(&b)],
+            Lang::En,
+        );
+        assert_eq!(app.active, 0);
+        app.on_key(ctrl(KeyCode::Char('p')));
+        for ch in "beta".chars() {
+            app.on_key(plain(KeyCode::Char(ch)));
+        }
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.active, 1, "Enter on a tab entry focuses that tab");
+        assert!(app.palette.is_none());
+    }
+
+    #[test]
+    fn quick_open_enter_with_no_candidates_opens_the_typed_path() {
+        let dir = temp_dir("quick_open_path");
+        let a = dir.join("only.md");
+        std::fs::write(&a, "x").expect("write");
+        let mut app = App::new(vec![Document::new_with_path(&a)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('p')));
+        for ch in "qq9".chars() {
+            app.on_key(plain(KeyCode::Char(ch)));
+        }
+        assert!(
+            app.palette.as_ref().unwrap().entries.is_empty(),
+            "nothing matches 'qq9'"
+        );
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.docs.len(), 2, "typed path opens as a new tab");
+        let last = app
+            .docs
+            .last()
+            .unwrap()
+            .path()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(last.ends_with("qq9"), "new tab uses the typed path: {last}");
     }
 }
