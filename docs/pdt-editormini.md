@@ -189,4 +189,46 @@ El texto seleccionado que se elimine al presionar Backspace o Suprimir
 Tiene algo de seleccion multicursor?
 Ctrl+Shift con flechas para seleccion rectangular.
 
+
+ ┌───┬─────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ # │ Qué                                                                         │ De dónde                                                                                           │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 1 │ Colores del resaltado Dark+: abrir .rs, .md, .json y validar la paleta      │ Tarea 6 — único ítem que quedó informal de la aceptación del Hito 1                                │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 2 │ i18n: correr en inglés (editormini) y español (--lang es) y mirar todos los │ Tarea 7 — formalmente sin cerrar                                                                   │
+ │   │ textos                                                                      │                                                                                                    │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 3 │ Búsqueda/reemplazo cruzado: Ctrl+Shift+F y Ctrl+Shift+H                     │ De Ctrl+F/Ctrl+H ya probaste varias rondas (el log lo registra); la variante cruzada no quedó      │
+ │   │                                                                             │ cerrada en el doc                                                                                  │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 4 │ Exe portable en una máquina SIN Visual C++ Redistributable                  │ Tarea 11 — en esta máquina ya lo verificaste; falta la máquina limpia                              │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 5 │ (Opcional) El diff de docs recién pusheado (4f80b3d..a41a1e1)               │ Sincronización de documentación de hoy                                                             │
+ └───┴─────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+Proponga plan de mejores practicas ahora que se utiliza github. Sin irse al extremo, pero algo mas que solo pushear siempre a main
+Anotar como funcionalidades a agregar cuando sea el momento adecuado:
+- Que recuerde los archivos de la ultima sesion, los guarda al salir. Si es posible, que los guarde periódicamente por si se sale abruptamente.
+- Mejorar el menu Ctr+O es un poco pobre. Proponga cambios efectivos pero con el menor costo posible y el caso ideal aunque tenga mas costo.
+Consulta. Como se Abre el segundo panel?
+Consulta. El readme indica que lenguajes soporta resaltado de colores? Recuerdeme por pantalla cuales son actualmente.
+
+ Tu cola de revisión (actualizada)
+ 1. Nuevo — probar la paleta: Ctrl+Shift+P (o F4), filtrá tipeando, Enter ejecuta; Ctrl+P quick open (pestañas primero, luego archivos del directorio; ruta tipeada si no hay
+    candidatos).
+ 2. Pendientes previos: colores Dark+ (tarea 6), i18n EN/ES (tarea 7), búsqueda cruzada Ctrl+Shift+F/H, exe portable en máquina limpia.
+ 3. Decisiones: LICENSE (MIT declarado, sin archivo), archivos scratch ya publicados.
+
 ----
+
+Revisiones.
+1. Colores del resaltado Dark+: abrir .rs, .md, .json y validar la paleta
+Revisadas extensiones .py .cs .md .json
+Solo .md no muestra el codigo de colores como lo hace visual code
+1. No hay muchos menus todavía pero parece que funciona bien en ingles.
+2. Funciona reemplazo de todos los documentos activos.
+3. En las pocas maquinas que no ha funcionado no he podido determinar la causa, luego pasaré reporte de equipo que entreca cpu-z para ver si aporta datos suficiente.
+4. (Opcional) El diff de docs recién pusheado (4f80b3d..a41a1e1)   No entendí cual es esta funcionalidad para verificarla.
+
+
