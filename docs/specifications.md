@@ -113,7 +113,7 @@ Prompt (misma banda de estado, invertida): EN `Save changes before closing? [Y]e
 | `Ctrl+G` | ir a línea: número + `Enter` salta, `Esc` cancela, fuera de rango se ajusta |
 | `Ctrl+S` / `F2` | guardar pestaña activa; sin título → Guardar como |
 | `Ctrl+Shift+S` / `F3` | guardar todas las pestañas modificadas con ruta |
-| `Ctrl+O` | abrir: lista interactiva del directorio (tipear filtra, `↑/↓` elige, `Enter` abre, `Esc` cancela) |
+| `Ctrl+O` | abrir: navegador del directorio — `..` sube, carpetas con `/` entran, tipear filtra, `↑/↓/Home/End/PgUp/PgDn` navegan, `Enter` abre, `Esc` cancela |
 | `Ctrl+Shift+P` / `F4` | paleta de comandos: filtro difuso sobre el registro localizado (↑/↓ elige, Enter ejecuta, Esc cancela) |
 | `Ctrl+P` | quick open difuso: pestañas abiertas + archivos del directorio activo; sin candidatos, Enter abre la ruta tipeada |
 | `Ctrl+Q` | salir (prompt si hay cambios) |

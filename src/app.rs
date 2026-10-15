@@ -214,6 +214,9 @@ impl Selection {
 /// Maximum undo steps kept per tab (oldest dropped first).
 pub const UNDO_LIMIT: usize = 100;
 
+/// Rows the interactive Ctrl+O list shows at once; the PageUp/PageDown step.
+const OPEN_LIST_PAGE: usize = 5;
+
 /// Bounded per-tab edit history. One undo step is a `Vec<EditRecord>` because
 /// one logical edit (an overwrite keystroke, a multi-line paste) can apply
 /// more than one record; typing bursts merge consecutive characters so
@@ -259,6 +262,9 @@ pub struct App {
     pub open_candidates: Vec<PathBuf>,
     /// Highlighted row within `open_candidates`.
     pub open_selected: usize,
+    /// Directory the Ctrl+O list is browsing (None = the active document's
+    /// directory or cwd). Entering folders sets it; Esc/close resets it.
+    pub open_dir: Option<PathBuf>,
     /// Pending search dialog state.
     pub search: Option<SearchState>,
     /// Search options struct (present for future toggles, no UI yet).
@@ -298,6 +304,7 @@ impl App {
             prompt: None,
             open_candidates: Vec::new(),
             open_selected: 0,
+            open_dir: None,
             search: None,
             search_options: SearchOptions::default(),
             palette: None,
@@ -1054,6 +1061,7 @@ impl App {
     /// Open the text-input prompt for a file path.
     fn open_file_prompt(&mut self) {
         self.prompt = Some((PromptKind::OpenFile, String::new()));
+        self.open_dir = None;
         self.refresh_open_candidates();
         self.open_selected = 0;
     }
@@ -1201,13 +1209,60 @@ impl App {
         let Some((PromptKind::OpenFile, input)) = &self.prompt else {
             return;
         };
-        let dir = self
-            .doc()
-            .path()
-            .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-        self.open_candidates = Self::compute_open_candidates(&dir, input);
+        let input = input.clone();
+        let dir = self.browsing_dir();
+        self.open_candidates = Self::compute_open_browser_entries(&dir, &input);
         self.open_selected = 0;
+    }
+
+    /// Directory the open-list is browsing: the explicit navigation root
+    /// when set, otherwise the active document's directory (cwd untitled).
+    fn browsing_dir(&self) -> PathBuf {
+        self.open_dir.clone().unwrap_or_else(|| {
+            self.doc()
+                .path()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        })
+    }
+
+    /// Entries for the interactive open-list browser: `..` (only while the
+    /// filter is empty, so a typed path keeps winning when nothing
+    /// matches), then subdirectories, then files — names containing
+    /// `filter` case-insensitively, each group sorted, capped at 50.
+    fn compute_open_browser_entries(dir: &std::path::Path, filter: &str) -> Vec<PathBuf> {
+        let mut entries: Vec<PathBuf> = Vec::new();
+        if filter.is_empty() && dir.parent().is_some() {
+            entries.push(PathBuf::from(".."));
+        }
+        let filter_lc = filter.to_lowercase();
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        let mut files: Vec<PathBuf> = Vec::new();
+        for entry in std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            let matches = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase().contains(&filter_lc))
+                .unwrap_or(false);
+            if !matches {
+                continue;
+            }
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.is_file() {
+                files.push(path);
+            }
+        }
+        dirs.sort();
+        files.sort();
+        entries.append(&mut dirs);
+        entries.append(&mut files);
+        entries.truncate(50);
+        entries
     }
 
     /// Files in `dir` whose file name contains `filter`
@@ -1592,20 +1647,65 @@ impl App {
                     self.open_selected += 1;
                 }
             }
+            KeyCode::Home if is_open => {
+                self.open_selected = 0;
+            }
+            KeyCode::End if is_open => {
+                if !self.open_candidates.is_empty() {
+                    self.open_selected = self.open_candidates.len() - 1;
+                }
+            }
+            KeyCode::PageDown if is_open => {
+                self.open_selected = (self.open_selected + OPEN_LIST_PAGE)
+                    .min(self.open_candidates.len().saturating_sub(1));
+            }
+            KeyCode::PageUp if is_open => {
+                self.open_selected = self.open_selected.saturating_sub(OPEN_LIST_PAGE);
+            }
             KeyCode::Enter => {
                 let kind = *kind;
                 let input_owned = input.clone();
                 match kind {
                     PromptKind::OpenFile => {
                         // The highlighted candidate wins over the raw input.
-                        let path = self
-                            .open_candidates
-                            .get(self.open_selected)
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .unwrap_or(input_owned);
+                        let Some(path) = self.open_candidates.get(self.open_selected).cloned()
+                        else {
+                            // No candidates: the typed input is the path.
+                            self.prompt = None;
+                            self.open_candidates.clear();
+                            self.open_selected = 0;
+                            self.open_dir = None;
+                            self.handle_prompt_confirm(&kind, &input_owned);
+                            return;
+                        };
+                        if path.ends_with("..") {
+                            // Climb one browsing level.
+                            let parent = self.browsing_dir().parent().map(|p| p.to_path_buf());
+                            if let Some(parent) = parent {
+                                self.open_dir = Some(parent);
+                            }
+                            if let Some((_, input)) = self.prompt.as_mut() {
+                                input.clear();
+                            }
+                            self.open_selected = 0;
+                            self.refresh_open_candidates();
+                            return;
+                        }
+                        if path.is_dir() {
+                            // Enter the directory and list its contents.
+                            self.open_dir = Some(path);
+                            if let Some((_, input)) = self.prompt.as_mut() {
+                                input.clear();
+                            }
+                            self.open_selected = 0;
+                            self.refresh_open_candidates();
+                            return;
+                        }
+                        let path = path.to_string_lossy().into_owned();
                         self.prompt = None;
                         self.open_candidates.clear();
                         self.open_selected = 0;
+                        self.open_dir = None;
                         self.handle_prompt_confirm(&kind, &path);
                     }
                     PromptKind::GotoLine => {
@@ -1629,6 +1729,7 @@ impl App {
                 self.prompt = None;
                 self.open_candidates.clear();
                 self.open_selected = 0;
+                self.open_dir = None;
             }
             KeyCode::Backspace => {
                 input.pop();
@@ -2589,19 +2690,36 @@ impl App {
         }
         let candidates = self.open_candidates.clone();
         let selected = self.open_selected;
-        let visible = candidates.len().min(5);
+        let visible = candidates.len().min(OPEN_LIST_PAGE);
+        // Display names: `..` for the parent, `name/` for directories,
+        // plain file names otherwise.
+        let display: Vec<String> = candidates
+            .iter()
+            .map(|p| {
+                if p.ends_with("..") {
+                    "..".to_string()
+                } else if p.is_dir() {
+                    format!(
+                        "{}/",
+                        p.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    )
+                } else {
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                }
+            })
+            .collect();
         // Fit the width to the longest visible name (marker + padding +
         // borders), never narrower than 24 nor wider than the editor.
         let skip = (selected + 1).saturating_sub(visible);
-        let longest = candidates
+        let longest = display
             .iter()
             .skip(skip)
             .take(visible)
-            .map(|p| {
-                p.file_name()
-                    .map(|n| n.to_string_lossy().chars().count())
-                    .unwrap_or(0)
-            })
+            .map(|name| name.chars().count())
             .max()
             .unwrap_or(0);
         let width = (longest as u16 + 8).max(24).min(editor_area.width);
@@ -2613,17 +2731,13 @@ impl App {
             width,
             height,
         };
-        let lines: Vec<Line> = candidates
+        let lines: Vec<Line> = display
             .iter()
+            .enumerate()
             .skip(skip)
             .take(visible)
-            .enumerate()
-            .map(|(i, path)| {
+            .map(|(i, name)| {
                 let idx = skip + i;
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
                 let style = if idx == selected {
                     Style::new()
                         .fg(self.theme.prompt_fg)
@@ -5995,7 +6109,8 @@ three",
         let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
         app.on_key(ctrl(KeyCode::Char('o')));
         assert!(app.prompt.is_some());
-        assert_eq!(app.open_candidates.len(), 3, "all dir files listed");
+        // ".." (browser parent, empty filter) + all dir files listed.
+        assert_eq!(app.open_candidates.len(), 4);
         // Typing filters the candidate list (and feeds the input field).
         typed(&mut app, "gam");
         assert_eq!(app.open_candidates.len(), 1);
@@ -6052,25 +6167,29 @@ three",
         terminal.draw(|f| app.draw(f)).unwrap();
         app.on_key(ctrl(KeyCode::Char('o')));
         terminal.draw(|f| app.draw(f)).unwrap();
-        // 2 candidates -> bordered popup, height 4 (2 entries + borders),
-        // anchored at the editor bottom: frame rows 5-8, width 24 (min).
-        // Row 5: top border with the hint title; row 6: selected entry;
-        // row 7: second entry; row 8: bottom border.
+        // 3 candidates (".." + 2 files) -> bordered popup, height 5
+        // (3 entries + borders), anchored at the editor bottom: frame rows
+        // 4-8, width 24 (min). Row 4: top border with the hint title;
+        // row 5: selected entry (".."); row 6: only.txt; row 7: seed.txt;
+        // row 8: bottom border.
         let mut top = String::new();
+        let mut up_row = String::new();
         let mut sel_row = String::new();
         let mut second = String::new();
         for col in 0..26u16 {
-            top.push_str(terminal.backend().buffer().get(col, 5).symbol());
+            top.push_str(terminal.backend().buffer().get(col, 4).symbol());
+            up_row.push_str(terminal.backend().buffer().get(col, 5).symbol());
             sel_row.push_str(terminal.backend().buffer().get(col, 6).symbol());
             second.push_str(terminal.backend().buffer().get(col, 7).symbol());
         }
         assert!(top.contains('┌'), "top border: {top}");
-        assert!(top.contains("pick"), "hint title: {top}");
-        assert!(sel_row.contains("> only.txt"), "row 6: {sel_row}");
+        assert!(top.contains("Home"), "hint title with nav keys: {top}");
+        assert!(up_row.contains("> .."), "row 5: {up_row}");
+        assert!(sel_row.contains("only.txt"), "row 6: {sel_row}");
         assert!(second.contains("seed.txt"), "row 7: {second}");
         // The right border closes the fitted width at col 23.
         assert_eq!(terminal.backend().buffer().get(23, 6).symbol(), "│");
-        let cell = terminal.backend().buffer().get(1, 6);
+        let cell = terminal.backend().buffer().get(1, 5);
         assert_eq!(cell.style().bg, Some(Color::Rgb(0xE2, 0xC0, 0x89)));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -6578,5 +6697,146 @@ gamma",
         terminal.draw(|f| app.draw(f)).unwrap();
         app.on_key(ctrl_shift(KeyCode::Char('p')));
         terminal.draw(|f| app.draw(f)).unwrap(); // must not panic at width 20
+    }
+
+    // ---- Ctrl+O browser: navigation keys + folder navigation ----
+
+    #[test]
+    fn open_list_home_end_page_keys_navigate() {
+        let dir = temp_dir("open_nav_keys");
+        for name in [
+            "a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "f.txt", "g.txt",
+        ] {
+            std::fs::write(dir.join(name), "x").expect("write");
+        }
+        let seed = dir.join("a.txt");
+        let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('o')));
+        // ".." (empty filter, parent exists) + the 7 files.
+        let total = app.open_candidates.len();
+        assert_eq!(total, 8, ".. + 7 files: {:?}", app.open_candidates);
+        app.on_key(plain(KeyCode::End));
+        assert_eq!(app.open_selected, total - 1, "End jumps to the last row");
+        app.on_key(plain(KeyCode::Home));
+        assert_eq!(app.open_selected, 0, "Home jumps to the first row");
+        app.on_key(plain(KeyCode::PageDown));
+        assert_eq!(app.open_selected, 5, "PgDn moves one visible page (5)");
+        app.on_key(plain(KeyCode::PageUp));
+        assert_eq!(app.open_selected, 0);
+        app.on_key(plain(KeyCode::PageUp));
+        assert_eq!(app.open_selected, 0, "PgUp clamps at the top");
+    }
+
+    #[test]
+    fn open_list_shows_parent_and_directories_and_enters_them() {
+        let dir = temp_dir("open_nav_dirs");
+        let sub = dir.join("sub");
+        std::fs::create_dir(&sub).expect("mkdir");
+        std::fs::write(dir.join("root.txt"), "x").expect("write");
+        std::fs::write(sub.join("inner.txt"), "x").expect("write");
+        let seed = dir.join("root.txt");
+        let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('o')));
+        // ".." + dir "sub" (before files) + file "root.txt".
+        assert_eq!(app.open_candidates.len(), 3, "{:?}", app.open_candidates);
+        assert_eq!(app.open_candidates[0], PathBuf::from(".."));
+        assert_eq!(app.open_candidates[1], sub, "dirs sort before files");
+        // Enter on the directory enters it and lists its contents.
+        app.on_key(plain(KeyCode::Down));
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.open_dir.as_deref(), Some(sub.as_path()));
+        assert!(
+            app.open_candidates.contains(&sub.join("inner.txt")),
+            "{:?}",
+            app.open_candidates
+        );
+        assert!(!app.open_candidates.contains(&dir.join("root.txt")));
+        assert!(
+            app.prompt.as_ref().unwrap().1.is_empty(),
+            "navigation clears the filter"
+        );
+        // Enter on ".." (selected 0) climbs back up.
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.open_dir.as_deref(), Some(dir.as_path()));
+        assert!(app.open_candidates.contains(&dir.join("root.txt")));
+    }
+
+    #[test]
+    fn open_list_esc_resets_folder_navigation() {
+        let dir = temp_dir("open_nav_esc");
+        let sub = dir.join("sub");
+        std::fs::create_dir(&sub).expect("mkdir");
+        let seed = dir.join("seed.txt");
+        std::fs::write(&seed, "x").expect("write");
+        let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('o')));
+        app.on_key(plain(KeyCode::Down)); // on "sub"
+        app.on_key(plain(KeyCode::Enter)); // enter sub
+        assert!(app.open_dir.is_some());
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.prompt.is_none());
+        assert!(app.open_dir.is_none(), "closing resets the browsing root");
+    }
+
+    #[test]
+    fn open_list_enter_on_file_opens_from_browsed_dir() {
+        let dir = temp_dir("open_nav_open");
+        let sub = dir.join("sub");
+        std::fs::create_dir(&sub).expect("mkdir");
+        std::fs::write(sub.join("inner.txt"), "x").expect("write");
+        let seed = dir.join("seed.txt");
+        std::fs::write(&seed, "x").expect("write");
+        let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('o')));
+        app.on_key(plain(KeyCode::Down)); // on "sub"
+        app.on_key(plain(KeyCode::Enter)); // enter sub
+        for ch in "inner".chars() {
+            app.on_key(plain(KeyCode::Char(ch)));
+        }
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.docs.len(), 2, "file inside the browsed dir opens");
+        assert_eq!(app.active, 1);
+        assert_eq!(
+            app.docs[1].path().unwrap(),
+            sub.join("inner.txt").as_path(),
+            "opened from the browsed directory"
+        );
+        assert!(app.open_dir.is_none(), "opening resets navigation");
+    }
+
+    #[test]
+    fn open_list_typed_path_still_wins_when_nothing_matches() {
+        // ".." must not shadow the typed-path fallback: with a non-empty
+        // filter that matches nothing, Enter opens the typed input.
+        let dir = temp_dir("open_nav_typed");
+        let seed = dir.join("seed.txt");
+        std::fs::write(&seed, "x").expect("write");
+        let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('o')));
+        for ch in "new_file.txt".chars() {
+            app.on_key(plain(KeyCode::Char(ch)));
+        }
+        assert!(app.open_candidates.is_empty(), "no match for the new name");
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.docs.len(), 2, "typed path opens as a new tab");
+    }
+
+    #[test]
+    fn quick_open_palette_stays_files_only() {
+        // The palette quick-open keeps tabs+files (VS Code style); folder
+        // navigation belongs to the Ctrl+O browser.
+        let dir = temp_dir("open_nav_palette");
+        let sub = dir.join("sub");
+        std::fs::create_dir(&sub).expect("mkdir");
+        std::fs::write(dir.join("f.txt"), "x").expect("write");
+        let seed = dir.join("seed.txt");
+        std::fs::write(&seed, "x").expect("write");
+        let mut app = App::new(vec![Document::new_with_path(&seed)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('p')));
+        for entry in &app.palette.as_ref().unwrap().entries {
+            if let PaletteEntry::File(path) = entry {
+                assert!(!path.is_dir(), "quick open must not list directories");
+            }
+        }
     }
 }

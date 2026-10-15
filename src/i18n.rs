@@ -296,10 +296,10 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::ClipboardError) => "Error de portapapeles",
         // Interactive open-file list hint (title of the bordered popup).
         (Lang::En, Key::OpenListHints) => {
-            "\u{2191}\u{2193} pick · Enter open · Esc exit · type to filter"
+            "\u{2191}\u{2193}/Home/End/PgUp/PgDn pick \u{b7} Enter open, dir/ in \u{b7} ../up \u{b7} Esc exit \u{b7} type filters"
         }
         (Lang::Es, Key::OpenListHints) => {
-            "\u{2191}\u{2193} elegir · Enter abrir · Esc salir · tipeá para filtrar"
+            "\u{2191}\u{2193}/Home/End/PgUp/PgDn elegir \u{b7} Enter abre, carpeta/ entra \u{b7} ../sube \u{b7} Esc salir \u{b7} tipe\u{e1} filtra"
         }
         // Go-to-line prompt (Ctrl+G).
         (Lang::En, Key::GotoLine) => "Go to line: ",
