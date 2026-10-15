@@ -296,10 +296,10 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::ClipboardError) => "Error de portapapeles",
         // Interactive open-file list hint (title of the bordered popup).
         (Lang::En, Key::OpenListHints) => {
-            "\u{2191}\u{2193} pick · Enter open · Esc cancel · type to filter"
+            "\u{2191}\u{2193} pick · Enter open · Esc exit · type to filter"
         }
         (Lang::Es, Key::OpenListHints) => {
-            "\u{2191}\u{2193} elegir · Enter abrir · Esc cancelar · tipeá para filtrar"
+            "\u{2191}\u{2193} elegir · Enter abrir · Esc salir · tipeá para filtrar"
         }
         // Go-to-line prompt (Ctrl+G).
         (Lang::En, Key::GotoLine) => "Go to line: ",
@@ -347,17 +347,17 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::CmdLastDocPanel1) => "Ver: Último documento del panel 1 (Ctrl+1)",
         // Command palette popup hint (title of the bordered popup).
         (Lang::En, Key::PaletteHints) => {
-            "\u{2191}\u{2193} pick \u{b7} Enter run \u{b7} Esc cancel \u{b7} type to filter"
+            "\u{2191}\u{2193} pick \u{b7} Enter run \u{b7} Esc exit \u{b7} type to filter"
         }
         (Lang::Es, Key::PaletteHints) => {
-            "\u{2191}\u{2193} elegir \u{b7} Enter ejecutar \u{b7} Esc cancelar \u{b7} tipeá para filtrar"
+            "\u{2191}\u{2193} elegir \u{b7} Enter ejecutar \u{b7} Esc salir \u{b7} tipeá para filtrar"
         }
         // Quick-open popup hint (title of the bordered popup).
         (Lang::En, Key::QuickOpenHints) => {
-            "\u{2191}\u{2193} pick \u{b7} Enter open \u{b7} Esc cancel \u{b7} type to filter"
+            "\u{2191}\u{2193} pick \u{b7} Enter open \u{b7} Esc exit \u{b7} type to filter"
         }
         (Lang::Es, Key::QuickOpenHints) => {
-            "\u{2191}\u{2193} elegir \u{b7} Enter abrir \u{b7} Esc cancelar \u{b7} tipeá para filtrar"
+            "\u{2191}\u{2193} elegir \u{b7} Enter abrir \u{b7} Esc salir \u{b7} tipeá para filtrar"
         }
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");

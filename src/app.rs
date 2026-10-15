@@ -2735,12 +2735,7 @@ impl App {
         let block = Block::new()
             .borders(Borders::ALL)
             .border_style(Style::new().fg(self.theme.accent))
-            .title(Span::styled(
-                hints,
-                Style::new()
-                    .fg(self.theme.line_number_fg)
-                    .add_modifier(Modifier::DIM),
-            ));
+            .title(Span::styled(hints, Style::new().fg(self.theme.fg)));
         // Blank the popup area first so editor text cannot bleed through.
         f.render_widget(Clear, area);
         f.render_widget(
