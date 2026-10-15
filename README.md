@@ -1,8 +1,15 @@
 # editormini
 
+**Hecho en [Rust](https://www.rust-lang.org/)** (edición 2024): TUI con `ratatui` + `crossterm`, resaltado de sintaxis con `syntect`, CLI con `clap` y portapapeles con `arboard`. Compila a un solo ejecutable portable.
+
 Editor de texto para terminal (TUI) con la **forma de uso de Visual Studio Code**: pestañas, resaltado de sintaxis por extensión con la paleta clásica **Dark+**, interfaz en inglés o español, y un solo ejecutable portable.
 
-Estado: **Hito 1 en curso** — editor base con pestañas, ya usable (ver [docs/avances.md](docs/avances.md)).
+## Estado del proyecto
+
+- **Versión completada — v0.1.0 (Hito 1 + extensiones)**: editor base con pestañas, resaltado por extensión, i18n EN/ES, búsqueda/reemplazo (documento activo y cruzado), selección con portapapeles del sistema y movimientos VS Code, operaciones de línea, mouse, gutter de números de línea y exe portable. **211 tests verdes, build con 0 warnings.** Detalle: [avances.md](docs/avances.md).
+- **Versión en progreso — Hito 2 (planificado, aún sin código)**: paleta de comandos (`Ctrl+Shift+P`) y apertura difusa de archivos (`Ctrl+P`). Ruta completa: [plan.md](docs/plan.md).
+
+**Especificación:** [specifications.md](docs/specifications.md) — comportamiento completo, modelo de datos e i18n, agnóstico del lenguaje (referencia para una futura app hermana). Complementos: [hallazgos.md](docs/hallazgos.md) (decisiones con dato y defectos) y [métricas y estimación](docs/metricas-y-estimacion.md).
 
 ## Compilar
 
@@ -38,7 +45,7 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | `Ctrl+W` | cerrar pestaña (pregunta si hay cambios) |
 | `Ctrl+PgDn` / `Ctrl+PgUp` | pestaña siguiente / anterior (cicla) |
 | `Ctrl+1` | ir al último documento del panel 1 (`Ctrl+2` reservada para el panel 2) |
-| `Ctrl+Z` / `Ctrl+Y` | deshacer / rehacer (historial acotado por pestaña; cada tanda de tipeo es un paso) |
+| `Ctrl+Z` / `Ctrl+Y` (o `Ctrl+Shift+Z`) | deshacer / rehacer (historial acotado por pestaña; cada tanda de tipeo es un paso) |
 | `F3` / `Ctrl+Shift+S` | guardar todo (pestañas con ruta; omite sin título) — fuera del diálogo de búsqueda |
 | `Alt+↑` / `Alt+↓` | mover la línea del cursor una posición arriba/abajo (con selección activa mueve todo el bloque seleccionado; la selección viaja con él) |
 | `Ctrl+K` (o `Ctrl+Shift+K`) | eliminar la línea completa del cursor (con selección activa borra todas las líneas seleccionadas; la columna se conserva) |
@@ -46,9 +53,10 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | `Ctrl+G` | ir a línea: número de línea destino (`Enter` salta, `Esc` cancela; fuera de rango se ajusta a la última línea) |
 | `Ctrl+O` | abrir archivo: ventana con borde y lista de los archivos del directorio del documento activo — tipeá para filtrar, `↑`/`↓` elegís, `Enter` abre, `Esc` cancela (también acepta escribir una ruta directamente) |
 | `Ctrl+F` | buscar en el documento activo (diálogo con contador; `Enter`/`F3` siguiente, `Shift+Enter`/`Shift+F3` anterior, `Esc` cierra; opciones case/regex a futuro) |
-| `Ctrl+H` | reemplazar en el documento activo (diálogo con pestaña entre Query/Replace, `F5` reemplaza actual, `F6` reemplaza todo con confirmación Y/N) |
+| `Ctrl+H` | reemplazar en el documento activo (diálogo con pestaña entre Query/Replace —`Tab` cambia de campo—, `Ctrl+Enter` o `F5` reemplaza la coincidencia actual, `F6` reemplaza todo con confirmación Y/N) |
 | `Ctrl+Shift+F` | buscar en todos los documentos abiertos (itera coincidencias en orden de pestañas, cambia de pestaña al cruzar límites, muestra título del doc actual; `Esc` restaura la pestaña de inicio si no se navegó) |
 | `Ctrl+Shift+H` | reemplazar en todos los documentos abiertos (reemplaza actual y avanza cambiando pestañas; reemplazar todo con confirmación única muestra total de ocurrencias y número de archivos; docs solo-lectura se omiten; deshacer por pestaña) |
+| `Esc` | cierra el diálogo activo (en búsqueda, restaura cursor/pestaña si no se navegó); en el editor, colapsa la selección |
 | `Ctrl+C` / `Ctrl+Insert` | copiar (selección activa; sin selección copia la línea actual) |
 | `Ctrl+X` / `Shift+Supr` | cortar (selección activa; sin selección corta la línea actual) |
 | `Ctrl+V` / `Shift+Insert` | pegar (si hay selección activa la reemplaza; un `Ctrl+Z` deshace todo el reemplazo) |
@@ -90,10 +98,13 @@ src/
   main.rs      CLI, carga de archivos, ciclo de vida del terminal
   app.rs       bucle de eventos, teclas, dibujo, pestañas, modales
   document/    modelo de documento (líneas, BOM, fin de línea, solo-lectura)
+  highlight.rs resaltado de sintaxis por extensión (syntect → spans de ratatui)
+  theme.rs     paleta de la UI (Dark+ de VS Code; Light+ preparado)
   pane.rs      árbol de paneles (preparado para pantalla dividida)
   i18n.rs      catálogo de mensajes EN/ES (exhaustivo por compilación)
   config.rs    configuración JSON junto al ejecutable
-docs/          plan del proyecto, avances y hallazgos
+  build.rs     sello de compilación UTC (MMDD-HHMM) que muestra la barra de estado
+docs/          plan del proyecto, especificaciones, avances, hallazgos y métricas
 odd/           tareas del flujo de trabajo (ODD)
 ```
 

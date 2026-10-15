@@ -4,10 +4,10 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 
 ## Estado actual
 
-- **Hito 1**: 11 de 12 tareas completadas (1, 2, 3, 4, 5, 7, 9, 10, 11 y 12; la 3 —deshacer— se reordenó después de la 5 a pedido del dueño para tener algo probable antes).
-- **Verificación**: 138+ tests (114 originales + 24+ nuevos de búsqueda/reemplazo), build con 0 warnings.
-- **Ronda de hardening (task 9 mouse)**: refactor de `tab_layout` helper compartido entre render y hit-testing, test de `col_off` no nulo, y tests de rueda de scroll con distancia exacta.
-- **Verificado por el dueño**: escritura correcta, guardado, prompt de salida, `●` de modificado en pestañas.
+- **Hito 1: completo** — las 11 tareas del documento terminadas y verificadas por el dueño (tipeo, guardado, ciclo de archivos, mouse, barra de estado, exe portable), más el gutter de números de línea como unidad adicional.
+- **Sobre la base del hito**, entregado y probado: búsqueda/reemplazo en documento activo y cruzado (`Ctrl+F/H`, `Ctrl+Shift+F/H`), selección con portapapeles del sistema y movimientos VS Code, operaciones de línea (`Alt+↑/↓`, `Ctrl+K` con respaldo `F8`, `Ctrl+G`), lista interactiva de apertura (`Ctrl+O`) y sello de compilación en la barra de estado.
+- **Verificación**: 211 tests, build con 0 warnings.
+- **Siguiente**: Hito 2 — paleta de comandos (ver [plan.md](plan.md)).
 
 ## Cronología
 
@@ -42,9 +42,10 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 
 ## Próximo
 
-1. Tarea 6 — resaltado por extensión con tema Dark+ (el más visible).
-2. Tarea 3 — deshacer/rehacer acotado (Ctrl+Z/Y, tandas de tipeo, historia por pestaña).
-3. **Multi-cursor (a futuro, pedido del dueño)** — el modelo actual usa un único `(cursor_line, cursor_col)` por pestaña, pero las operaciones de documento ya son posición-explícitas (`EditRecord` con `line`/`col`), así que agregar multi-cursor es barato: `Vec<Cursor { anchor, head }>` con el primario al final, las ediciones abanican por cursor y se normalizan al terminar; render itera cursores. Variantes VS Code después: `Ctrl+D` (añadir siguiente coincidencia), `Ctrl+Alt+↑/↓` (cursor en columna), `Alt+Click`.
-4. **Widget de búsqueda compacto estilo VS Code (a futuro, pedido del dueño)** — hoy el diálogo de búsqueda/reemplazo es una barra de 1 fila a lo ancho del editor; la evolución es un widget flotante compacto arriba a la derecha (solo el ancho de sus campos, con botones implícitos), como el find-widget de VS Code.
-5. **Reemplazo más similar a VS Code (a futuro, pedido del dueño)** — el reemplazo ya funciona (S6: "Ahora se puede reemplazar"); evolucionar hacia el modelo VS Code: campo de reemplazo integrado al widget de búsqueda, botones replace/replace-all, preservar mayúsculas, historial de búsquedas.
+1. **Hito 2 — Paleta de comandos** (`Ctrl+Shift+P`) con búsqueda difusa sobre un registro de comandos; keymap remapeable; `Ctrl+P` para abrir archivos (fuzzy picker).
+2. **Multi-cursor (a futuro, pedido del dueño)** — el modelo actual usa un único `(cursor_line, cursor_col)` por pestaña, pero las operaciones de documento ya son posición-explícitas (`EditRecord` con `line`/`col`), así que agregar multi-cursor es barato: `Vec<Cursor { anchor, head }>` con el primario al final, las ediciones abanican por cursor y se normalizan al terminar; render itera cursores. Variantes VS Code después: `Ctrl+D` (añadir siguiente coincidencia), `Ctrl+Alt+↑/↓` (cursor en columna), `Alt+Click`. Con él se agrupa la selección rectangular (decisión del dueño).
+3. **Widget de búsqueda compacto estilo VS Code (a futuro, pedido del dueño)** — hoy el diálogo de búsqueda/reemplazo es una barra de 1 fila a lo ancho del editor; la evolución es un widget flotante compacto arriba a la derecha (solo el ancho de sus campos, con botones implícitos), como el find-widget de VS Code.
+4. **Reemplazo más similar a VS Code (a futuro, pedido del dueño)** — el reemplazo ya funciona (S6: "Ahora se puede reemplazar"); evolucionar hacia el modelo VS Code: campo de reemplazo integrado al widget de búsqueda, botones replace/replace-all, preservar mayúsculas, historial de búsquedas.
+5. **Anillo de historial de portapapeles (diseño cerrado, sin fecha)** — kill-ring interno de las últimas n copias/cortes, `Ctrl+Shift+V` pega el anterior y repite hacia atrás; alternativa de popup reutilizando el patrón de la lista de apertura; NO espejar el historial al portapapeles del sistema.
+6. **Pasos de PgUp/PgDn por altura de pantalla** — anotación del dueño: que el salto sea la cantidad de filas visibles (estilo Total Commander) en lugar del paso fijo actual.
 

@@ -44,8 +44,10 @@ Preparaciones ya plantadas para el futuro:
 
 ## Ruta de vida (hitos)
 
-### Hito 1 — Editor base con pestañas *(en curso)*
+### Hito 1 — Editor base con pestañas *(completado)*
 Abrir, editar, guardar varios archivos en pestañas con resaltado por extensión y exe único. Detalle de tareas y estado: `odd/tasks/milestone-1-editor-tabs.md` y [avances.md](avances.md).
+
+Entregado además sobre esa base: búsqueda/reemplazo en documento activo y cruzado (`Ctrl+F/H`, `Ctrl+Shift+F/H`), selección con portapapeles del sistema y movimientos estándar de VS Code, operaciones de línea (`Alt+↑/↓`, `Ctrl+K`, `F8`, `Ctrl+G`), lista interactiva de apertura (`Ctrl+O`), gutter de números de línea y mouse básico. Siguiente parada: **Hito 2 — paleta de comandos**.
 
 ### Hito 2 — Paleta de comandos
 `Ctrl+Shift+P` con búsqueda difusa sobre un registro de comandos; keymap remapeable; `Ctrl+P` para abrir archivos (fuzzy picker). Es el corazón de "usarse como VS Code".

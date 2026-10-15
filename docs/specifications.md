@@ -83,7 +83,7 @@ Layout de 3 bandas (alto completo del terminal):
 
 1. **Barra de pestañas** (1 fila): una pestaña por documento, `nombre ● ` si tiene cambios sin guardar; activa resaltada; separador `│` entre inactivas. `●` también en la status bar.
 2. **Viewport de edición** (resto): solo las líneas visibles se renderizan (y en el hito 1+, solo las visibles se resaltan). Cursor del terminal posicionado sobre la celda lógica.
-3. **Barra de estado** (1 fila): `nombre ● Ln l, Col c` + modo `OVR ` si sobrescribe + mensaje de estado a la derecha. Fondo azul `#007ACC`, texto blanco. Cuando hay confirmación pendiente, la banda muestra el prompt con fondo ámbar.
+3. **Barra de estado** (1 fila): a la izquierda `● nombre Ln l, Col c` + modo `OVR `/`SOB ` si sobrescribe + `[RO]` si es solo-lectura; a la derecha el lenguaje detectado (Rust/Markdown/…), el mensaje de estado y el **sello de compilación** `v0.1.0·MMDD-HHMM` (UTC, emitido por `build.rs` en cada build). Fondo azul `#007ACC`, texto blanco. Cuando hay confirmación o diálogo pendiente, la banda muestra el prompt con fondo ámbar.
 
 Scroll: el viewport sigue al cursor (vertical y horizontal); `scroll_top`/`col_off` se ajustan al perder visibilidad.
 
@@ -100,31 +100,47 @@ Prompt (misma banda de estado, invertida): EN `Save changes before closing? [Y]e
 
 | Tecla | Acción |
 |---|---|
-| Caracteres imprimibles | insertar en cursor (tanda de undo) |
+| Caracteres imprimibles | insertar en cursor (tanda de undo); con selección activa la reemplaza |
 | `Enter` | nueva línea (cierra tanda) |
-| `Backspace` / `Delete` | borrar atrás / adelante (cierran tanda) |
+| `Backspace` / `Delete` | borrar atrás / adelante (cierran tanda); con selección activa borran la selección |
 | `Insert` | alternar sobrescribir (indicador `OVR`) |
 | Flechas, `Home`, `End`, `PgUp`, `PgDn` | movimiento |
-| `Ctrl+S` / `F2` | guardar pestaña activa |
+| `Shift` + movimiento | selección con ancla fija (flechas, Home/End, PgUp/PgDn) |
+| `Ctrl+←/→` | mover por palabras; con `Shift`, seleccionar por palabras |
+| `Ctrl+Home` / `Ctrl+End` | inicio / fin del documento; con `Shift`, selecciona |
+| `Alt+↑` / `Alt+↓` | mover la línea del cursor (o el bloque seleccionado) arriba/abajo; un paso de undo |
+| `Ctrl+K` (acepta `Ctrl+Shift+K`) | eliminar la línea del cursor (o todas las seleccionadas); `F8` es el respaldo universal |
+| `Ctrl+G` | ir a línea: número + `Enter` salta, `Esc` cancela, fuera de rango se ajusta |
+| `Ctrl+S` / `F2` | guardar pestaña activa; sin título → Guardar como |
+| `Ctrl+Shift+S` / `F3` | guardar todas las pestañas modificadas con ruta |
+| `Ctrl+O` | abrir: lista interactiva del directorio (tipear filtra, `↑/↓` elige, `Enter` abre, `Esc` cancela) |
 | `Ctrl+Q` | salir (prompt si hay cambios) |
 | `Ctrl+W` | cerrar pestaña (prompt si hay cambios) |
-| `Ctrl+PgDn` / `Ctrl+PgUp` | pestaña siguiente / anterior (cicla; preparado para saltar entre paneles) |
-| `Ctrl+1` | ir al último documento del panel 1 |
-| `Ctrl+2` | reservada: último documento del panel 2 (no-op hasta splits) |
+| `Ctrl+PgDn` / `Ctrl+PgUp` | pestaña siguiente / anterior (cicla) |
+| `Ctrl+1` | ir al último documento del panel 1 (`Ctrl+2` reservada) |
 | `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z` | deshacer / rehacer / rehacer |
+| `Ctrl+C` / `Ctrl+Insert` | copiar (selección; sin selección, la línea actual) |
+| `Ctrl+X` / `Shift+Supr` | cortar (selección; sin selección, la línea actual) |
+| `Ctrl+V` / `Shift+Insert` | pegar (reemplaza la selección activa en un paso de undo) |
+| `Ctrl+F` | buscar en el documento activo (contador; `Enter`/`F3` siguiente, `Shift+Enter`/`Shift+F3` anterior, `Esc` cierra) |
+| `Ctrl+H` | reemplazar en el documento activo (Tab cambia de campo, `Ctrl+Enter`/`F5` reemplaza la coincidencia actual, `F6` reemplaza todo con confirmación) |
+| `Ctrl+Shift+F` | buscar en todos los documentos abiertos (cambia de pestaña al cruzar límites) |
+| `Ctrl+Shift+H` | reemplazar en todos los documentos abiertos (docs solo-lectura se omiten; undo por pestaña) |
+| `Esc` | cierra el diálogo activo (en búsqueda restaura cursor/pestaña si no se navegó); en el editor colapsa la selección |
+| Clic en editor / pestaña; rueda | colocar cursor / cambiar pestaña; rueda = scroll (mismo rango que PgUp/PgDn) |
+| Números de línea | gutter siempre visible, alineado a la derecha, con énfasis en la línea del cursor |
 
 ### Planificado
 
 | Tecla | Hito | Acción |
 |---|---|---|
-| `Ctrl+Shift+S` | 2 | **guardar todas las pestañas modificadas** (pedido del dueño; pendiente) |
 | `Ctrl+Shift+P` | 2 | paleta de comandos |
 | `Ctrl+P` | 2 | abrir archivo por búsqueda difusa |
-| `Ctrl+O` | 2 | abrir archivo (diálogo/navegador) |
 | `Ctrl+N` | 2 | nuevo documento |
-| Click / rueda | 2 | mouse: cursor, pestañas, scroll |
+| `Ctrl+D` / `Ctrl+Alt+↑↓` / `Alt+Click` | futuro | multi-cursor (pedido del dueño; incluye selección rectangular) |
+| `Ctrl+Shift+V` | diseño | anillo de historial de portapapeles (kill-ring interno; no espeja al sistema) |
 
-Regla de fallback: toda tecla crítica debe tener alternativa que ningún terminal pueda absorber (ej. `F2` por `Ctrl+S`, que mintty consume como XOFF).
+Regla de fallback: toda tecla crítica debe tener alternativa que ningún terminal pueda absorber (ej. `F2` por `Ctrl+S`, que mintty consume como XOFF; `F8` por `Ctrl+Shift+K`; `F3`/`F5`/`F6` en los diálogos).
 
 ## 8. Internacionalización **[H1]**
 
@@ -152,10 +168,10 @@ Política: archivo ausente → valores por defecto; archivo malformado → error
 }
 ```
 
-## 10. Resaltado de sintaxis y temas **[H1·parcial]**
+## 10. Resaltado de sintaxis y temas **[H1]**
 
-- **Por extensión de archivo**, con motor de gramáticas TextMate/Sublime (syntect en Rust; en una app hermana, cualquier motor equivalente: TextMate, tree-sitter).
-- Lenguajes curados (hito 1): Rust, Go, JavaScript/TypeScript (+JSX/TSX), Python, C/C++, JSON, TOML, YAML, Markdown, HTML, CSS, XML, Shell (.sh/.bat/.ps1).
+- **Por extensión de archivo**, con motor de gramáticas TextMate/Sublime (syntect en Rust; en una app hermana, cualquier motor equivalente: TextMate, tree-sitter). Resaltado **sin estado por frame**: se parsea solo la ventana visible (limitación documentada: una ventana abierta a mitad de comentario de bloque colorea como texto hasta que el comentario cierra; estado incremental por pestaña es la optimización posterior).
+- Lenguajes curados (hito 1): Rust, Go, JavaScript/TypeScript (+JSX/TSX), Python, C/C++, JSON, TOML, YAML, Markdown, HTML, CSS, XML, Shell (`.sh`, `.bat`). Fallbacks de extensión: `toml→yml`, `ts/tsx/jsx→js`; **`.ps1` no tiene gramática aún** y queda como texto plano hasta el cargador de gramáticas externas.
 - **Solo se resaltan las líneas visibles** por frame.
 - Temas: **Dark+ de VS Code** por defecto. Paleta chrome (hex): fondo editor `#1E1E1E`, texto `#D4D4D4`, pestaña activa `#09477B`, pestaña inactiva `#2D2D2D`, acento/status `#007ACC`, modificado `#E2C089`. `Light+` existe como estructura con paleta placeholder (hito 4 lo completa).
 - Gramáticas **externas**: el motor debe poder cargar gramáticas de archivos (TextMate/`.sublime-syntax`) desde un directorio de datos (p. ej. `languages/`) sin recompilar — camino de soporte para Typst y otros.
@@ -163,7 +179,9 @@ Política: archivo ausente → valores por defecto; archivo malformado → error
 ## 11. Flujo de archivos **[H1]**
 
 - CLI: `editormini [ARCHIVO]... [--lang en|es]`. Cada archivo = una pestaña; los inexistentes se crean al primer guardado (documento con ruta, vacío).
-- Guardar: escribe BOM (si `has_bom`), líneas unidas con el fin de línea almacenado, nueva línea final según `ends_with_newline`. Éxito → mensaje `Saved <ruta> (<n> B)`; documento sin ruta → error visible (Guardar Como llega en hito 2).
+- Guardar: escribe BOM (si `has_bom`), líneas unidas con el fin de línea almacenado, nueva línea final según `ends_with_newline`. Éxito → mensaje `Saved <ruta> (<n> B)`. Documento sin título: `Ctrl+S` abre **Guardar como** (prompt de ruta; la pestaña adopta la ruta).
+- **Guardar todo** (`Ctrl+Shift+S`/`F3`): guarda las pestañas modificadas que tienen ruta; omite sin título.
+- **Abrir** (`Ctrl+O`): lista interactiva de los archivos del directorio del documento activo (o cwd si es sin título); filtra tipeando, `Enter` abre y enfoca la pestaña; también acepta escribir una ruta directamente.
 - Salir con cambios: modal (ver §6).
 
 ## 12. Extensiones especificadas (futuro)
@@ -173,11 +191,11 @@ Política: archivo ausente → valores por defecto; archivo malformado → error
 - **Pantalla dividida [H5]**: el layout raíz es un **árbol de paneles** (`Single(doc) | Split{primero, segundo, ratio‰, vertical}`) ya definido; split = extender el árbol. Divisor arrastrable con mouse; **scroll sincronizado** entre dos paneles (bandera de enlace) para comparar archivos.
 - **LSP / linter [H6]**: cliente LSP estándar; los diagnósticos entran por la status bar y el gutter. El bucle de eventos debe ser compatible con I/O asíncrona.
 - **Exportación [H7]**: Markdown→PDF orquestando un **comando externo** con **plantilla CSS externa** (ambos configurados en `export`); Typst como gramática externa + `typst compile`. El editor nunca embebe el generador.
-- **Mouse [H2/H5]**: click = cursor, click en pestañas, rueda = scroll; luego arrastre de selección y divisor.
+- **Mouse [H1·básico]**: click = cursor, click en pestañas, rueda = scroll; luego arrastre de selección y divisor.
 
 ## 13. Criterios de calidad
 
-1. Suite de tests automatizados verde (hito 1: 53 tests — modelo, keymap, i18n, config, temas, resaltado).
+1. Suite de tests automatizados verde (211 tests al cierre del hito 1 y sus extensiones: modelo, keymap, i18n, config, temas, resaltado, búsqueda/reemplazo, selección/portapapeles, mouse).
 2. Compilación con **cero warnings**.
 3. i18n completo garantizado por compilación.
 4. Un commit de trabajo por tarea, mensajes convencionales, evidencia registrada.
