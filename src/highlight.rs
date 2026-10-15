@@ -65,6 +65,12 @@ fn build_dark_plus_tokens() -> SyntectTheme {
         ("entity.name.function", rgb(0xDC, 0xDC, 0xAA), false),
         ("entity.name.type", rgb(0x4E, 0xC9, 0xB0), false),
         ("support.type", rgb(0x4E, 0xC9, 0xB0), false),
+        // Markdown / prose (VS Code Dark+ markup colors). Without these,
+        // every Markdown token fell back to the base foreground and .md
+        // files rendered colorless (owner review round 2026-10-15).
+        ("markup.heading", rgb(0x56, 0x9C, 0xD6), false),
+        ("markup.quote", rgb(0x6A, 0x99, 0x55), false),
+        ("markup.raw", rgb(0xCE, 0x91, 0x78), false),
     ];
 
     SyntectTheme {
@@ -258,6 +264,42 @@ mod tests {
                 .spans
                 .iter()
                 .all(|span| span.style.bg == Some(Color::Black))
+        );
+    }
+
+    #[test]
+    fn markdown_markup_scopes_get_dark_plus_colors() {
+        // Owner review round: .md rendered colorless — the curated Dark+ map
+        // had no markup.* scopes, so every Markdown token fell back to base
+        // foreground. Dark+ reference colors: heading blue, quote green,
+        // inline code orange.
+        let lines = ["# Title", "> quoted", "a `code` span"];
+        let out = styled_lines(
+            &lines,
+            Some("md"),
+            Color::Rgb(0xD4, 0xD4, 0xD4),
+            Color::Black,
+        );
+        assert!(
+            out[0]
+                .spans
+                .iter()
+                .any(|span| span.style.fg == Some(Color::Rgb(0x56, 0x9C, 0xD6))),
+            "heading line must carry the markup.heading blue"
+        );
+        assert!(
+            out[1]
+                .spans
+                .iter()
+                .any(|span| span.style.fg == Some(Color::Rgb(0x6A, 0x99, 0x55))),
+            "block quote must carry the markup.quote green"
+        );
+        assert!(
+            out[2]
+                .spans
+                .iter()
+                .any(|span| span.style.fg == Some(Color::Rgb(0xCE, 0x91, 0x78))),
+            "inline code must carry the markup.raw orange"
         );
     }
 }
