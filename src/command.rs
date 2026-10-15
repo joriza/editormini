@@ -47,25 +47,82 @@ pub fn all_commands() -> Vec<Command> {
     // NOTE: `Key` is deliberately NOT glob-imported: `CommandKind::GotoLine`
     // and `Key::GotoLine` would collide into an ambiguous name.
     vec![
-        Command { kind: Save, label_key: Key::CmdSave },
-        Command { kind: SaveAll, label_key: Key::CmdSaveAll },
-        Command { kind: Open, label_key: Key::CmdOpen },
-        Command { kind: CloseTab, label_key: Key::CmdCloseTab },
-        Command { kind: Quit, label_key: Key::CmdQuit },
-        Command { kind: Undo, label_key: Key::CmdUndo },
-        Command { kind: Redo, label_key: Key::CmdRedo },
-        Command { kind: Find, label_key: Key::CmdFind },
-        Command { kind: Replace, label_key: Key::CmdReplace },
-        Command { kind: FindAllDocs, label_key: Key::CmdFindAllDocs },
-        Command { kind: ReplaceAllDocs, label_key: Key::CmdReplaceAllDocs },
-        Command { kind: DeleteLine, label_key: Key::CmdDeleteLine },
-        Command { kind: MoveLineUp, label_key: Key::CmdMoveLineUp },
-        Command { kind: MoveLineDown, label_key: Key::CmdMoveLineDown },
-        Command { kind: ToggleOverwrite, label_key: Key::CmdToggleOverwrite },
-        Command { kind: GotoLine, label_key: Key::CmdGotoLine },
-        Command { kind: NextTab, label_key: Key::CmdNextTab },
-        Command { kind: PrevTab, label_key: Key::CmdPrevTab },
-        Command { kind: LastDocPanel1, label_key: Key::CmdLastDocPanel1 },
+        Command {
+            kind: Save,
+            label_key: Key::CmdSave,
+        },
+        Command {
+            kind: SaveAll,
+            label_key: Key::CmdSaveAll,
+        },
+        Command {
+            kind: Open,
+            label_key: Key::CmdOpen,
+        },
+        Command {
+            kind: CloseTab,
+            label_key: Key::CmdCloseTab,
+        },
+        Command {
+            kind: Quit,
+            label_key: Key::CmdQuit,
+        },
+        Command {
+            kind: Undo,
+            label_key: Key::CmdUndo,
+        },
+        Command {
+            kind: Redo,
+            label_key: Key::CmdRedo,
+        },
+        Command {
+            kind: Find,
+            label_key: Key::CmdFind,
+        },
+        Command {
+            kind: Replace,
+            label_key: Key::CmdReplace,
+        },
+        Command {
+            kind: FindAllDocs,
+            label_key: Key::CmdFindAllDocs,
+        },
+        Command {
+            kind: ReplaceAllDocs,
+            label_key: Key::CmdReplaceAllDocs,
+        },
+        Command {
+            kind: DeleteLine,
+            label_key: Key::CmdDeleteLine,
+        },
+        Command {
+            kind: MoveLineUp,
+            label_key: Key::CmdMoveLineUp,
+        },
+        Command {
+            kind: MoveLineDown,
+            label_key: Key::CmdMoveLineDown,
+        },
+        Command {
+            kind: ToggleOverwrite,
+            label_key: Key::CmdToggleOverwrite,
+        },
+        Command {
+            kind: GotoLine,
+            label_key: Key::CmdGotoLine,
+        },
+        Command {
+            kind: NextTab,
+            label_key: Key::CmdNextTab,
+        },
+        Command {
+            kind: PrevTab,
+            label_key: Key::CmdPrevTab,
+        },
+        Command {
+            kind: LastDocPanel1,
+            label_key: Key::CmdLastDocPanel1,
+        },
     ]
 }
 
