@@ -18,8 +18,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
+use crate::command::{Command, CommandKind, all_commands};
 use crate::config::ThemeChoice;
 use crate::document::{Document, DocumentError, EditRecord};
+use crate::fuzzy;
 use crate::highlight;
 use crate::i18n::{self, Key, Lang};
 use crate::pane::PaneTree;
@@ -69,6 +71,63 @@ pub enum PromptKind {
 pub struct SearchOptions {
     pub case_sensitive: bool,
     pub is_regex: bool,
+}
+
+/// What the palette modal is listing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteKind {
+    /// Command palette (Ctrl+Shift+P / F4).
+    Command,
+    /// Quick-open file picker (Ctrl+P) — wired by milestone 2 T4.
+    #[allow(dead_code)]
+    QuickOpen,
+}
+
+/// One selectable row of the palette.
+#[derive(Debug, Clone, Copy)]
+pub enum PaletteEntry {
+    /// A registry command to execute.
+    Command(Command),
+}
+
+/// Command palette / quick-open modal state (milestone 2).
+#[derive(Debug)]
+pub struct PaletteState {
+    /// What the palette lists.
+    #[allow(dead_code)] // TODO(hito-2/T4): read once QuickOpen wiring lands.
+    pub kind: PaletteKind,
+    /// Typed filter text.
+    pub query: String,
+    /// Filtered rows in ranked (best-first) order.
+    pub entries: Vec<PaletteEntry>,
+    /// Highlighted row within `entries`.
+    pub selected: usize,
+}
+
+impl PaletteState {
+    /// Open a fresh palette of `kind` with an empty query.
+    pub fn new(kind: PaletteKind, lang: Lang) -> Self {
+        let mut state = Self {
+            kind,
+            query: String::new(),
+            entries: Vec::new(),
+            selected: 0,
+        };
+        state.refresh(lang);
+        state
+    }
+
+    /// Recompute `entries` for the current query: rank the registry labels
+    /// through the fuzzy matcher, best first, and reset the highlight.
+    fn refresh(&mut self, lang: Lang) {
+        let source = all_commands();
+        let labels: Vec<&'static str> = source.iter().map(|c| i18n::t(lang, c.label_key)).collect();
+        self.entries = fuzzy::rank(&self.query, labels)
+            .into_iter()
+            .map(|(i, _)| PaletteEntry::Command(source[i]))
+            .collect();
+        self.selected = 0;
+    }
 }
 
 /// Per-match position within a line (char offsets).
@@ -215,6 +274,8 @@ pub struct App {
     pub search: Option<SearchState>,
     /// Search options struct (present for future toggles, no UI yet).
     pub search_options: SearchOptions,
+    /// Command palette / quick-open modal (milestone 2).
+    pub palette: Option<PaletteState>,
     /// Overwrite mode (Insert key). Off by default: VS Code-style insertion.
     pub overwrite: bool,
     /// Transient status message. Persists until the next edit action or the
@@ -250,6 +311,7 @@ impl App {
             open_selected: 0,
             search: None,
             search_options: SearchOptions::default(),
+            palette: None,
             overwrite: false,
             status: i18n::t(lang, Key::StartupHints).to_string(),
             lang,
@@ -1267,6 +1329,12 @@ impl App {
     pub fn on_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        // The palette consumes everything while it is open; other modals
+        // never coexist with it (it only opens with none active).
+        if self.palette.is_some() {
+            self.on_palette_key(key);
+            return;
+        }
         // Ctrl+H opens the replace dialog (even when search is active).
         // Ctrl+Shift+H opens cross-doc replace.
         if ctrl && matches!(key.code, KeyCode::Char('h' | 'H')) {
@@ -1306,6 +1374,12 @@ impl App {
             // F8 → delete the current line (fallback for Ctrl+Shift+K when
             // the terminal/PTY strips the modifiers)
             (KeyCode::F(8), _, _) => self.delete_line(),
+            // Ctrl+Shift+P → command palette (must precede the generic
+            // Ctrl+P quick-open arm that milestone 2 T4 adds)
+            (KeyCode::Char('p' | 'P'), true, true) => self.open_palette(),
+            // F4 → command palette (terminal-proof fallback; F2/F3/F5/F6/F8
+            // precedent)
+            (KeyCode::F(4), _, _) => self.open_palette(),
             // Ctrl+O → open file prompt
             (KeyCode::Char('o' | 'O'), true, _) => self.open_file_prompt(),
             (KeyCode::Char('f' | 'F'), true, _) => self.open_search(),
@@ -1323,15 +1397,7 @@ impl App {
             // Shift+Insert → paste (Windows-classic fallback)
             (KeyCode::Insert, _, true) => self.paste_from_clipboard(),
             // Plain Insert → toggle overwrite mode
-            (KeyCode::Insert, _, _) => {
-                self.overwrite = !self.overwrite;
-                let key = if self.overwrite {
-                    Key::OverwriteOn
-                } else {
-                    Key::OverwriteOff
-                };
-                self.status = i18n::t(self.lang, key).to_string();
-            }
+            (KeyCode::Insert, _, _) => self.toggle_overwrite(),
             // Ctrl+C / Ctrl+Insert → copy
             (KeyCode::Char('c' | 'C'), true, _) => self.copy_selection_or_line(),
             // Ctrl+X / Shift+Delete → cut
@@ -1637,6 +1703,95 @@ impl App {
             // GotoLine confirms inline in on_prompt_key and never reaches here.
             PromptKind::GotoLine => {}
         }
+    }
+
+    /// Open the command palette (Ctrl+Shift+P, F4 fallback). Only reachable
+    /// from the main key dispatch, so it never fights another modal.
+    fn open_palette(&mut self) {
+        self.palette = Some(PaletteState::new(PaletteKind::Command, self.lang));
+    }
+
+    /// Handle keys while the palette is open: type to filter, ↑/↓ to pick,
+    /// Enter to run, Esc to cancel. Everything else is swallowed.
+    fn on_palette_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Esc => self.palette = None,
+            KeyCode::Up => {
+                if let Some(palette) = self.palette.as_mut() {
+                    palette.selected = palette.selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down => {
+                if let Some(palette) = self.palette.as_mut()
+                    && palette.selected + 1 < palette.entries.len()
+                {
+                    palette.selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                // Take the palette first so the executed command can open
+                // another modal (search, prompt, confirm) without a fight.
+                let Some(palette) = self.palette.take() else {
+                    return;
+                };
+                if let Some(PaletteEntry::Command(command)) = palette.entries.get(palette.selected)
+                {
+                    let kind = command.kind;
+                    self.execute_command(kind);
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(palette) = self.palette.as_mut() {
+                    palette.query.pop();
+                    palette.refresh(self.lang);
+                }
+            }
+            KeyCode::Char(c) if !ctrl && !alt => {
+                if let Some(palette) = self.palette.as_mut() {
+                    palette.query.push(c);
+                    palette.refresh(self.lang);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Run a registry command by mapping it to its existing App action.
+    fn execute_command(&mut self, kind: CommandKind) {
+        match kind {
+            CommandKind::Save => self.save_active(),
+            CommandKind::SaveAll => self.save_all(),
+            CommandKind::Open => self.open_file_prompt(),
+            CommandKind::CloseTab => self.request_close(),
+            CommandKind::Quit => self.request_quit(),
+            CommandKind::Undo => self.undo(),
+            CommandKind::Redo => self.redo(),
+            CommandKind::Find => self.open_search(),
+            CommandKind::Replace => self.open_replace(),
+            CommandKind::FindAllDocs => self.open_cross_doc_search(),
+            CommandKind::ReplaceAllDocs => self.open_cross_doc_replace(),
+            CommandKind::DeleteLine => self.delete_line(),
+            CommandKind::MoveLineUp => self.move_lines(-1),
+            CommandKind::MoveLineDown => self.move_lines(1),
+            CommandKind::ToggleOverwrite => self.toggle_overwrite(),
+            CommandKind::GotoLine => self.open_goto_line_prompt(),
+            CommandKind::NextTab => self.next_doc(1),
+            CommandKind::PrevTab => self.next_doc(-1),
+            CommandKind::LastDocPanel1 => self.last_doc_of_panel(1),
+        }
+    }
+
+    /// Toggle overwrite mode (Insert / palette command).
+    fn toggle_overwrite(&mut self) {
+        self.overwrite = !self.overwrite;
+        let key = if self.overwrite {
+            Key::OverwriteOn
+        } else {
+            Key::OverwriteOff
+        };
+        self.status = i18n::t(self.lang, key).to_string();
     }
 
     /// Open the search dialog, saving the current cursor position
@@ -2346,6 +2501,7 @@ impl App {
         self.draw_editor(f, editor_area);
         self.draw_status(f, status_area);
         self.draw_open_list(f, editor_area);
+        self.draw_palette(f, editor_area);
     }
 
     /// Interactive Ctrl+O candidate list: a bordered popup at the bottom of
@@ -2412,6 +2568,92 @@ impl App {
             .border_style(Style::new().fg(self.theme.accent))
             .title(Span::styled(
                 hints,
+                Style::new()
+                    .fg(self.theme.line_number_fg)
+                    .add_modifier(Modifier::DIM),
+            ));
+        // Blank the popup area first so editor text cannot bleed through.
+        f.render_widget(Clear, area);
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .style(Style::new().bg(self.theme.bg)),
+            area,
+        );
+    }
+
+    /// Command palette popup: top-center over the editor, echoing the query
+    /// on an input row and the ranked entries below it (VS Code style). The
+    /// input row uses prompt colors; the highlighted entry is bold with a
+    /// `>` marker; no matches shows a dim row instead of nothing.
+    fn draw_palette(&mut self, f: &mut Frame, editor_area: ratatui::prelude::Rect) {
+        let Some(palette) = self.palette.as_ref() else {
+            return;
+        };
+        let lang = self.lang;
+        let query = palette.query.clone();
+        let selected = palette.selected;
+        let entries: Vec<String> = palette
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                PaletteEntry::Command(command) => i18n::t(lang, command.label_key).to_string(),
+            })
+            .collect();
+        let visible = entries.len().clamp(1, 7);
+        let skip = (selected + 1).saturating_sub(visible);
+        let longest = entries
+            .iter()
+            .skip(skip)
+            .take(visible)
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(query.chars().count() + 2);
+        let width = (longest as u16 + 10).clamp(30, editor_area.width);
+        let rows = if entries.is_empty() { 2 } else { 1 + visible }; // input + entries (or No matches)
+        let height = (rows as u16 + 2).min(editor_area.height);
+        let x = editor_area.x + editor_area.width.saturating_sub(width) / 2;
+        let area = ratatui::prelude::Rect {
+            x,
+            y: editor_area.y,
+            width,
+            height,
+        };
+        let input = Line::from(Span::styled(
+            format!("> {query}"),
+            Style::new()
+                .fg(self.theme.prompt_fg)
+                .bg(self.theme.prompt_bg)
+                .add_modifier(Modifier::BOLD),
+        ));
+        let mut lines = vec![input];
+        if entries.is_empty() {
+            lines.push(Line::from(Span::styled(
+                i18n::t(lang, Key::NoMatches).to_string(),
+                Style::new()
+                    .fg(self.theme.line_number_fg)
+                    .add_modifier(Modifier::DIM),
+            )));
+        } else {
+            for (i, label) in entries.iter().enumerate().skip(skip).take(visible) {
+                let marker = if i == selected { "> " } else { "  " };
+                let style = if i == selected {
+                    Style::new()
+                        .fg(self.theme.prompt_fg)
+                        .bg(self.theme.prompt_bg)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::new().fg(self.theme.fg).bg(self.theme.bg)
+                };
+                lines.push(Line::from(Span::styled(format!("{marker}{label}"), style)));
+            }
+        }
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(self.theme.accent))
+            .title(Span::styled(
+                i18n::t(lang, Key::PaletteHints),
                 Style::new()
                     .fg(self.theme.line_number_fg)
                     .add_modifier(Modifier::DIM),
@@ -5985,5 +6227,146 @@ gamma",
         app.on_key(plain(KeyCode::Home));
         app.on_key(shift(KeyCode::Delete));
         assert_eq!(app.doc().line(1), "", "last-line cut clears the line");
+    }
+
+    // ---- Milestone 2 T3: command palette (Ctrl+Shift+P / F4) ----
+
+    fn palette_labels(app: &App) -> Vec<String> {
+        let palette = app.palette.as_ref().expect("palette must be open");
+        palette
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                PaletteEntry::Command(command) => i18n::t(app.lang, command.label_key).to_string(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ctrl_shift_p_and_f4_open_the_palette() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl_shift(KeyCode::Char('p')));
+        assert!(app.palette.is_some(), "Ctrl+Shift+P must open the palette");
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.palette.is_none(), "Esc must close the palette");
+        app.on_key(plain(KeyCode::F(4)));
+        assert!(app.palette.is_some(), "F4 must open the palette too");
+    }
+
+    #[test]
+    fn empty_query_lists_every_registry_command() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl_shift(KeyCode::Char('p')));
+        let labels = palette_labels(&app);
+        assert_eq!(
+            labels.len(),
+            crate::command::all_commands().len(),
+            "empty query must list the whole registry"
+        );
+        assert!(labels.iter().any(|l| l.contains("Save All")));
+    }
+
+    #[test]
+    fn typing_filters_the_palette_fuzzily() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl_shift(KeyCode::Char('p')));
+        for c in "sv".chars() {
+            app.on_key(plain(KeyCode::Char(c)));
+        }
+        let labels = palette_labels(&app);
+        assert_eq!(labels.len(), 2, "only the two Save commands match 'sv'");
+        assert!(labels.iter().all(|l| l.contains("Save")));
+        // Filter characters must not reach the buffer.
+        assert_eq!(app.doc().line(0), "", "palette chars must not edit the doc");
+    }
+
+    #[test]
+    fn enter_executes_the_highlighted_command() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl_shift(KeyCode::Char('p')));
+        for c in "overw".chars() {
+            app.on_key(plain(KeyCode::Char(c)));
+        }
+        let labels = palette_labels(&app);
+        assert_eq!(labels.len(), 1, "only Toggle Overwrite matches 'overw'");
+        assert!(
+            labels[0].contains("Overwrite"),
+            "best match first: {labels:?}"
+        );
+        app.on_key(plain(KeyCode::Enter));
+        assert!(app.overwrite, "Enter must run the highlighted command");
+        assert!(app.palette.is_none(), "palette closes after running");
+        assert!(
+            app.status.contains("Overwrite ON"),
+            "status: {}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn esc_closes_the_palette_without_touching_the_buffer() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        for c in "hola".chars() {
+            app.on_key(plain(KeyCode::Char(c)));
+        }
+        app.on_key(ctrl_shift(KeyCode::Char('p')));
+        app.on_key(plain(KeyCode::Char('x')));
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.palette.is_none());
+        assert_eq!(
+            app.doc().line(0),
+            "hola",
+            "palette keys must not edit the doc"
+        );
+    }
+
+    #[test]
+    fn arrows_move_the_palette_highlight_and_clamp() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl_shift(KeyCode::Char('p')));
+        let total = app.palette.as_ref().unwrap().entries.len();
+        assert!(total > 2, "registry must have several commands");
+        app.on_key(plain(KeyCode::Down));
+        assert_eq!(app.palette.as_ref().unwrap().selected, 1);
+        app.on_key(plain(KeyCode::Down));
+        assert_eq!(app.palette.as_ref().unwrap().selected, 2);
+        app.on_key(plain(KeyCode::Up));
+        assert_eq!(app.palette.as_ref().unwrap().selected, 1);
+        for _ in 0..5 {
+            app.on_key(plain(KeyCode::Up));
+        }
+        assert_eq!(app.palette.as_ref().unwrap().selected, 0, "clamps at top");
+    }
+
+    #[test]
+    fn palette_does_not_open_while_search_dialog_is_active() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('f')));
+        assert!(app.search.is_some());
+        app.on_key(ctrl_shift(KeyCode::Char('p')));
+        assert!(app.palette.is_none(), "the search dialog keeps priority");
+        assert!(app.search.is_some());
+    }
+
+    #[test]
+    fn palette_renders_query_line_and_entries() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        // Prime the viewport before opening the palette (stale-viewport gotcha).
+        terminal.draw(|f| app.draw(f)).unwrap();
+        app.on_key(ctrl_shift(KeyCode::Char('p')));
+        for c in "sv".chars() {
+            app.on_key(plain(KeyCode::Char(c)));
+        }
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let mut frame = String::new();
+        for y in 0..10u16 {
+            for x in 0..80u16 {
+                frame.push_str(terminal.backend().buffer().get(x, y).symbol());
+            }
+        }
+        assert!(frame.contains("> sv"), "input row must echo the query");
+        assert!(frame.contains("File: Save"), "entries must render");
     }
 }

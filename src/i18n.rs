@@ -164,6 +164,8 @@ pub enum Key {
     CmdPrevTab,
     /// Palette: View: Last Document of Panel 1.
     CmdLastDocPanel1,
+    /// Command palette hint line (popup title).
+    PaletteHints,
 }
 
 /// Translate `key` for `lang`.
@@ -319,15 +321,9 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::CmdFind) => "Editar: Buscar (Ctrl+F)",
         (Lang::En, Key::CmdReplace) => "Edit: Replace (Ctrl+H)",
         (Lang::Es, Key::CmdReplace) => "Editar: Reemplazar (Ctrl+H)",
-        (Lang::En, Key::CmdFindAllDocs) => {
-            "Edit: Find in All Open Documents (Ctrl+Shift+F)"
-        }
-        (Lang::Es, Key::CmdFindAllDocs) => {
-            "Editar: Buscar en todos los documentos (Ctrl+Shift+F)"
-        }
-        (Lang::En, Key::CmdReplaceAllDocs) => {
-            "Edit: Replace in All Open Documents (Ctrl+Shift+H)"
-        }
+        (Lang::En, Key::CmdFindAllDocs) => "Edit: Find in All Open Documents (Ctrl+Shift+F)",
+        (Lang::Es, Key::CmdFindAllDocs) => "Editar: Buscar en todos los documentos (Ctrl+Shift+F)",
+        (Lang::En, Key::CmdReplaceAllDocs) => "Edit: Replace in All Open Documents (Ctrl+Shift+H)",
         (Lang::Es, Key::CmdReplaceAllDocs) => {
             "Editar: Reemplazar en todos los documentos (Ctrl+Shift+H)"
         }
@@ -347,6 +343,13 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::CmdPrevTab) => "Ver: Pestaña anterior (Ctrl+PgUp)",
         (Lang::En, Key::CmdLastDocPanel1) => "View: Last Document of Panel 1 (Ctrl+1)",
         (Lang::Es, Key::CmdLastDocPanel1) => "Ver: Último documento del panel 1 (Ctrl+1)",
+        // Command palette popup hint (title of the bordered popup).
+        (Lang::En, Key::PaletteHints) => {
+            "\u{2191}\u{2193} pick \u{b7} Enter run \u{b7} Esc cancel \u{b7} type to filter"
+        }
+        (Lang::Es, Key::PaletteHints) => {
+            "\u{2191}\u{2193} elegir \u{b7} Enter ejecutar \u{b7} Esc cancelar \u{b7} tipeá para filtrar"
+        }
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg
@@ -438,6 +441,7 @@ mod tests {
         Key::CmdNextTab,
         Key::CmdPrevTab,
         Key::CmdLastDocPanel1,
+        Key::PaletteHints,
     ];
 
     #[test]
