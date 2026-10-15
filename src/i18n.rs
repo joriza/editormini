@@ -126,6 +126,44 @@ pub enum Key {
     OpenListHints,
     /// Go-to-line prompt title (Ctrl+G).
     GotoLine,
+    /// Palette: File: Save.
+    CmdSave,
+    /// Palette: File: Save All.
+    CmdSaveAll,
+    /// Palette: File: Open.
+    CmdOpen,
+    /// Palette: File: Close Tab.
+    CmdCloseTab,
+    /// Palette: File: Quit.
+    CmdQuit,
+    /// Palette: Edit: Undo.
+    CmdUndo,
+    /// Palette: Edit: Redo.
+    CmdRedo,
+    /// Palette: Edit: Find.
+    CmdFind,
+    /// Palette: Edit: Replace.
+    CmdReplace,
+    /// Palette: Edit: Find in all open documents.
+    CmdFindAllDocs,
+    /// Palette: Edit: Replace in all open documents.
+    CmdReplaceAllDocs,
+    /// Palette: Edit: Delete Line.
+    CmdDeleteLine,
+    /// Palette: Edit: Move Line Up.
+    CmdMoveLineUp,
+    /// Palette: Edit: Move Line Down.
+    CmdMoveLineDown,
+    /// Palette: Edit: Toggle Overwrite Mode.
+    CmdToggleOverwrite,
+    /// Palette: Go: Go to Line.
+    CmdGotoLine,
+    /// Palette: View: Next Tab.
+    CmdNextTab,
+    /// Palette: View: Previous Tab.
+    CmdPrevTab,
+    /// Palette: View: Last Document of Panel 1.
+    CmdLastDocPanel1,
 }
 
 /// Translate `key` for `lang`.
@@ -262,6 +300,53 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         // Go-to-line prompt (Ctrl+G).
         (Lang::En, Key::GotoLine) => "Go to line: ",
         (Lang::Es, Key::GotoLine) => "Ir a línea: ",
+        // Command palette labels (VS Code "Category: Action (key)" style).
+        (Lang::En, Key::CmdSave) => "File: Save (Ctrl+S)",
+        (Lang::Es, Key::CmdSave) => "Archivo: Guardar (Ctrl+S)",
+        (Lang::En, Key::CmdSaveAll) => "File: Save All (Ctrl+Shift+S)",
+        (Lang::Es, Key::CmdSaveAll) => "Archivo: Guardar todo (Ctrl+Shift+S)",
+        (Lang::En, Key::CmdOpen) => "File: Open (Ctrl+O)",
+        (Lang::Es, Key::CmdOpen) => "Archivo: Abrir (Ctrl+O)",
+        (Lang::En, Key::CmdCloseTab) => "File: Close Tab (Ctrl+W)",
+        (Lang::Es, Key::CmdCloseTab) => "Archivo: Cerrar pestaña (Ctrl+W)",
+        (Lang::En, Key::CmdQuit) => "File: Quit (Ctrl+Q)",
+        (Lang::Es, Key::CmdQuit) => "Archivo: Salir (Ctrl+Q)",
+        (Lang::En, Key::CmdUndo) => "Edit: Undo (Ctrl+Z)",
+        (Lang::Es, Key::CmdUndo) => "Editar: Deshacer (Ctrl+Z)",
+        (Lang::En, Key::CmdRedo) => "Edit: Redo (Ctrl+Y)",
+        (Lang::Es, Key::CmdRedo) => "Editar: Rehacer (Ctrl+Y)",
+        (Lang::En, Key::CmdFind) => "Edit: Find (Ctrl+F)",
+        (Lang::Es, Key::CmdFind) => "Editar: Buscar (Ctrl+F)",
+        (Lang::En, Key::CmdReplace) => "Edit: Replace (Ctrl+H)",
+        (Lang::Es, Key::CmdReplace) => "Editar: Reemplazar (Ctrl+H)",
+        (Lang::En, Key::CmdFindAllDocs) => {
+            "Edit: Find in All Open Documents (Ctrl+Shift+F)"
+        }
+        (Lang::Es, Key::CmdFindAllDocs) => {
+            "Editar: Buscar en todos los documentos (Ctrl+Shift+F)"
+        }
+        (Lang::En, Key::CmdReplaceAllDocs) => {
+            "Edit: Replace in All Open Documents (Ctrl+Shift+H)"
+        }
+        (Lang::Es, Key::CmdReplaceAllDocs) => {
+            "Editar: Reemplazar en todos los documentos (Ctrl+Shift+H)"
+        }
+        (Lang::En, Key::CmdDeleteLine) => "Edit: Delete Line (Ctrl+K)",
+        (Lang::Es, Key::CmdDeleteLine) => "Editar: Eliminar línea (Ctrl+K)",
+        (Lang::En, Key::CmdMoveLineUp) => "Edit: Move Line Up (Alt+\u{2191})",
+        (Lang::Es, Key::CmdMoveLineUp) => "Editar: Mover línea arriba (Alt+\u{2191})",
+        (Lang::En, Key::CmdMoveLineDown) => "Edit: Move Line Down (Alt+\u{2193})",
+        (Lang::Es, Key::CmdMoveLineDown) => "Editar: Mover línea abajo (Alt+\u{2193})",
+        (Lang::En, Key::CmdToggleOverwrite) => "Edit: Toggle Overwrite Mode (Insert)",
+        (Lang::Es, Key::CmdToggleOverwrite) => "Editar: Alternar modo sobrescribir (Insert)",
+        (Lang::En, Key::CmdGotoLine) => "Go: Go to Line (Ctrl+G)",
+        (Lang::Es, Key::CmdGotoLine) => "Ir: Ir a línea (Ctrl+G)",
+        (Lang::En, Key::CmdNextTab) => "View: Next Tab (Ctrl+PgDn)",
+        (Lang::Es, Key::CmdNextTab) => "Ver: Pestaña siguiente (Ctrl+PgDn)",
+        (Lang::En, Key::CmdPrevTab) => "View: Previous Tab (Ctrl+PgUp)",
+        (Lang::Es, Key::CmdPrevTab) => "Ver: Pestaña anterior (Ctrl+PgUp)",
+        (Lang::En, Key::CmdLastDocPanel1) => "View: Last Document of Panel 1 (Ctrl+1)",
+        (Lang::Es, Key::CmdLastDocPanel1) => "Ver: Último documento del panel 1 (Ctrl+1)",
     };
     debug_assert!(!msg.is_empty(), "missing translation for {lang:?}/{key:?}");
     msg
@@ -334,6 +419,25 @@ mod tests {
         Key::ClipboardError,
         Key::OpenListHints,
         Key::GotoLine,
+        Key::CmdSave,
+        Key::CmdSaveAll,
+        Key::CmdOpen,
+        Key::CmdCloseTab,
+        Key::CmdQuit,
+        Key::CmdUndo,
+        Key::CmdRedo,
+        Key::CmdFind,
+        Key::CmdReplace,
+        Key::CmdFindAllDocs,
+        Key::CmdReplaceAllDocs,
+        Key::CmdDeleteLine,
+        Key::CmdMoveLineUp,
+        Key::CmdMoveLineDown,
+        Key::CmdToggleOverwrite,
+        Key::CmdGotoLine,
+        Key::CmdNextTab,
+        Key::CmdPrevTab,
+        Key::CmdLastDocPanel1,
     ];
 
     #[test]

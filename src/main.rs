@@ -4,6 +4,7 @@
 //! quit). Syntax highlighting, undo, and mouse support arrive next.
 
 mod app;
+mod command;
 mod config;
 mod document;
 mod fuzzy;
