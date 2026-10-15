@@ -49,8 +49,8 @@ Abrir, editar, guardar varios archivos en pestañas con resaltado por extensión
 
 Entregado además sobre esa base: búsqueda/reemplazo en documento activo y cruzado (`Ctrl+F/H`, `Ctrl+Shift+F/H`), selección con portapapeles del sistema y movimientos estándar de VS Code, operaciones de línea (`Alt+↑/↓`, `Ctrl+K`, `F8`, `Ctrl+G`), lista interactiva de apertura (`Ctrl+O`), gutter de números de línea y mouse básico. Siguiente parada: **Hito 2 — paleta de comandos**.
 
-### Hito 2 — Paleta de comandos
-`Ctrl+Shift+P` con búsqueda difusa sobre un registro de comandos; keymap remapeable; `Ctrl+P` para abrir archivos (fuzzy picker). Es el corazón de "usarse como VS Code".
+### Hito 2 — Paleta de comandos *(completado)*
+`Ctrl+Shift+P` con búsqueda difusa sobre un registro de comandos; `Ctrl+P` para abrir archivos (fuzzy picker). Es el corazón de "usarse como VS Code". Entregado: matcher difuso propio (puntaje por contigüidad, inicio de palabra y huecos), registro de 19 comandos localizados EN/ES, paleta con `F4` de respaldo y quick open sobre pestañas + directorio activo. El keymap remapeable queda para el hito 4.
 
 ### Hito 3 — Explorador lateral
 Árbol de archivos del proyecto navegable con teclado (y mouse), apertura por enter.

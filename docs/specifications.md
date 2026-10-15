@@ -114,6 +114,8 @@ Prompt (misma banda de estado, invertida): EN `Save changes before closing? [Y]e
 | `Ctrl+S` / `F2` | guardar pestaña activa; sin título → Guardar como |
 | `Ctrl+Shift+S` / `F3` | guardar todas las pestañas modificadas con ruta |
 | `Ctrl+O` | abrir: lista interactiva del directorio (tipear filtra, `↑/↓` elige, `Enter` abre, `Esc` cancela) |
+| `Ctrl+Shift+P` / `F4` | paleta de comandos: filtro difuso sobre el registro localizado (↑/↓ elige, Enter ejecuta, Esc cancela) |
+| `Ctrl+P` | quick open difuso: pestañas abiertas + archivos del directorio activo; sin candidatos, Enter abre la ruta tipeada |
 | `Ctrl+Q` | salir (prompt si hay cambios) |
 | `Ctrl+W` | cerrar pestaña (prompt si hay cambios) |
 | `Ctrl+PgDn` / `Ctrl+PgUp` | pestaña siguiente / anterior (cicla) |
@@ -186,7 +188,7 @@ Política: archivo ausente → valores por defecto; archivo malformado → error
 
 ## 12. Extensiones especificadas (futuro)
 
-- **Paleta de comandos [H2]**: registro de comandos con nombre localizado, búsqueda difusa, ejecución; el keymap se vuelve una tabla remapeable hacia ese registro.
+- **Paleta de comandos [H2 · entregada]**: `Ctrl+Shift+P`/`F4` con búsqueda difusa sobre el registro localizado de comandos; `Ctrl+P` quick open (pestañas abiertas + directorio activo; la ruta tipeada como respaldo). El keymap remapeable queda para el hito 4.
 - **Explorador lateral [H3]**: árbol de archivos; ancho fijo inicial; navegable con teclado.
 - **Pantalla dividida [H5]**: el layout raíz es un **árbol de paneles** (`Single(doc) | Split{primero, segundo, ratio‰, vertical}`) ya definido; split = extender el árbol. Divisor arrastrable con mouse; **scroll sincronizado** entre dos paneles (bandera de enlace) para comparar archivos.
 - **LSP / linter [H6]**: cliente LSP estándar; los diagnósticos entran por la status bar y el gutter. El bucle de eventos debe ser compatible con I/O asíncrona.

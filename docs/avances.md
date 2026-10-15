@@ -4,10 +4,11 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 
 ## Estado actual
 
+- **Hito 2: completo** — paleta de comandos (`Ctrl+Shift+P`/`F4`) con búsqueda difusa sobre un registro localizado de 19 comandos, y quick open (`Ctrl+P`) sobre pestañas abiertas + directorio activo; la ruta tipeada como respaldo. T1–T4 del feature doc con RED→GREEN observado por tarea.
 - **Hito 1: completo** — las 11 tareas del documento terminadas y verificadas por el dueño (tipeo, guardado, ciclo de archivos, mouse, barra de estado, exe portable), más el gutter de números de línea como unidad adicional.
 - **Sobre la base del hito**, entregado y probado: búsqueda/reemplazo en documento activo y cruzado (`Ctrl+F/H`, `Ctrl+Shift+F/H`), selección con portapapeles del sistema y movimientos VS Code, operaciones de línea (`Alt+↑/↓`, `Ctrl+K` con respaldo `F8`, `Ctrl+G`), lista interactiva de apertura (`Ctrl+O`) y sello de compilación en la barra de estado.
-- **Verificación**: 211 tests, build con 0 warnings.
-- **Siguiente**: Hito 2 — paleta de comandos (ver [plan.md](plan.md)).
+- **Verificación**: 234 tests, build con 0 warnings.
+- **Siguiente**: Hito 3 — explorador lateral (ver [plan.md](plan.md)).
 
 ## Cronología
 
@@ -34,6 +35,7 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 | 2026-10-12 | — | Selección + portapapeles + movimientos VS Code + abrir interactivo — Shift+flechas/Home/End/PgUp/PgDn selecciona (ancla fija); Ctrl+C/X/V y Shift+Insert/Shift+Supr/Ctrl+Insert con portapapeles del sistema (arboard); pegar reemplaza selección en un paso de deshacer; Ctrl+←/→ por palabra (con Shift selecciona); Ctrl+Home/End; Shift+F3 retrocede búsqueda; Ctrl+O ahora muestra lista interactiva del directorio (filtrar tipeando, ↑/↓, Enter) y abrir enfoca la pestaña; correcciones de barra: espacio entre nombre y Ln/Col, idioma a la derecha del sello, lado izquierdo prioritario al truncar | 199 tests; build 0 warnings |
 | 2026-10-12 | — | Pulido de legibilidad — la ayuda inicial de la barra de estado deja de listar `Ctrl+Z deshacer` (obvia, igual que buscar, que nunca se listó; `--help` de CLI conserva la referencia completa). Texto del diálogo de búsqueda/reemplazo oscurecido: título/query/contador y hints pasan de grises al `prompt_fg` negro (hints con DIM) — el gris claro sobre fondo ámbar no se leía; 2 tests nuevos | 156 tests; build 0 warnings |
 | 2026-10-12 | — | Tareas 3+4/4 — Ctrl+Shift+F búsqueda cruzada en todos los docs (itera en orden de pestañas, cambia de pestaña al cruzar límites, contador global con título de doc, Esc restaura pestaña de inicio si no se navegó); Ctrl+Shift+H reemplazo cruzado (reemplaza actual y avanza cambiando pestañas, reemplazar todo con confirmación única muestra total de ocurrencias y número de archivos, docs solo-lectura se omiten, deshacer por pestaña); 13 tests nuevos (aserciones en memoria: el reemplazo no auto-guarda, el guardado es explícito); 3 tests corregidos para asertar buffers en vez de archivos no guardados | 151 tests; build 0 warnings |
+| 2026-10-15 | `f3e552d`…`4c99520` | **Hito 2 completo** — matcher difuso propio (tanda +2, contigüidad +5, inicio de palabra +6, hueco −1), registro de 19 comandos localizados EN/ES (`src/command.rs`), paleta `Ctrl+Shift+P`/F4 con popup flotante superior (fila de consulta + entradas rankeadas + Sin coincidencias), quick open `Ctrl+P` (pestañas primero, luego archivos del directorio activo no abiertos; ruta tipeada como respaldo); T1–T4 test-first con RED observado por tarea; detalle en `odd/tasks/milestone-2-command-palette.md` | 234 tests; build 0 warnings |
 
 ## Reordenamientos decididos
 
@@ -42,7 +44,8 @@ Registro cronológico de entregas con su verificación. El detalle técnico por 
 
 ## Próximo
 
-1. **Hito 2 — Paleta de comandos** (`Ctrl+Shift+P`) con búsqueda difusa sobre un registro de comandos; keymap remapeable; `Ctrl+P` para abrir archivos (fuzzy picker).
+1. **Hito 3 — Explorador lateral**: árbol de archivos del proyecto navegable con teclado (y mouse), apertura por `Enter`.
+2. **Hito 4 — Configuración completa**: keymap remapeable sobre el registro de comandos ya entregado, tema claro completo, deshacer con historial completo estilo VS Code.
 2. **Multi-cursor (a futuro, pedido del dueño)** — el modelo actual usa un único `(cursor_line, cursor_col)` por pestaña, pero las operaciones de documento ya son posición-explícitas (`EditRecord` con `line`/`col`), así que agregar multi-cursor es barato: `Vec<Cursor { anchor, head }>` con el primario al final, las ediciones abanican por cursor y se normalizan al terminar; render itera cursores. Variantes VS Code después: `Ctrl+D` (añadir siguiente coincidencia), `Ctrl+Alt+↑/↓` (cursor en columna), `Alt+Click`. Con él se agrupa la selección rectangular (decisión del dueño).
 3. **Widget de búsqueda compacto estilo VS Code (a futuro, pedido del dueño)** — hoy el diálogo de búsqueda/reemplazo es una barra de 1 fila a lo ancho del editor; la evolución es un widget flotante compacto arriba a la derecha (solo el ancho de sus campos, con botones implícitos), como el find-widget de VS Code.
 4. **Reemplazo más similar a VS Code (a futuro, pedido del dueño)** — el reemplazo ya funciona (S6: "Ahora se puede reemplazar"); evolucionar hacia el modelo VS Code: campo de reemplazo integrado al widget de búsqueda, botones replace/replace-all, preservar mayúsculas, historial de búsquedas.
