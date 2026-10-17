@@ -1472,7 +1472,7 @@ impl App {
                 self.explorer_focused = false;
                 self.handle_prompt_confirm(
                     &PromptKind::OpenFile,
-                    &path.to_string_lossy().into_owned(),
+                    &path.to_string_lossy(),
                 );
             }
             if handled {
@@ -2858,7 +2858,13 @@ impl App {
             .borders(Borders::ALL)
             .border_style(Style::new().fg(theme.accent))
             .title(Span::styled(
-                "Explorer",
+                // T5: localized title + the tree root, so the panel always
+                // names the directory it is browsing.
+                format!(
+                    "{} \u{2014} {}",
+                    i18n::t(self.lang, Key::ExplorerTitle),
+                    state.root().display()
+                ),
                 Style::new()
                     .fg(theme.line_number_fg)
                     .add_modifier(Modifier::DIM),
@@ -4585,6 +4591,31 @@ mod tests {
             .collect();
         assert!(visible.contains("f11.txt"), "last row visible: {visible:?}");
         assert!(!visible.contains("f00.txt"), "top scrolled away: {visible:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn explorer_panel_title_shows_localized_name_and_root() {
+        let dir = explorer_fixture("title");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let title_row: String = (0..32).map(|x| buf[(x, 1)].symbol()).collect();
+        assert!(
+            title_row.contains("Explorer"),
+            "EN title in panel header: {title_row:?}"
+        );
+        // The panel is narrow, so the path may truncate: assert on its
+        // beginning rather than the whole string.
+        let root_prefix: String = dir.to_string_lossy().chars().take(10).collect();
+        assert!(
+            title_row.contains(&root_prefix),
+            "root path prefix {root_prefix:?} in panel header: {title_row:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

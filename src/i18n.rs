@@ -46,6 +46,8 @@ pub enum Key {
     LnCol,
     /// Startup keymap hint shown in the status bar.
     StartupHints,
+    /// Side explorer panel title.
+    ExplorerTitle,
     /// Overwrite mode enabled (Insert key).
     OverwriteOn,
     /// Overwrite mode disabled (Insert key).
@@ -194,11 +196,13 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Key::LnCol) => "Ln {ln}, Col {col}",
         (Lang::Es, Key::LnCol) => "Ln {ln}, Col {col}",
         (Lang::En, Key::StartupHints) => {
-            "F2/Ctrl+S save \u{b7} F3/Ctrl+Shift+S save all \u{b7} Ctrl+O open \u{b7} Ctrl+Q quit \u{b7} Ins overwrite \u{b7} Ctrl+PgUp/PgDn switch tab"
+            "F2/Ctrl+S save \u{b7} F3/Ctrl+Shift+S save all \u{b7} Ctrl+O open \u{b7} Ctrl+B explorer \u{b7} Ctrl+Q quit \u{b7} Ins overwrite \u{b7} Ctrl+PgUp/PgDn switch tab"
         }
         (Lang::Es, Key::StartupHints) => {
-            "F2/Ctrl+S guardar \u{b7} F3/Ctrl+Shift+S guardar todo \u{b7} Ctrl+O abrir \u{b7} Ctrl+Q salir \u{b7} Ins sobrescribir \u{b7} Ctrl+PgUp/PgDn cambiar pesta\u{f1}a"
+            "F2/Ctrl+S guardar \u{b7} F3/Ctrl+Shift+S guardar todo \u{b7} Ctrl+O abrir \u{b7} Ctrl+B explorador \u{b7} Ctrl+Q salir \u{b7} Ins sobrescribir \u{b7} Ctrl+PgUp/PgDn cambiar pesta\u{f1}a"
         }
+        (Lang::En, Key::ExplorerTitle) => "Explorer",
+        (Lang::Es, Key::ExplorerTitle) => "Explorador",
         (Lang::En, Key::OverwriteOn) => "Overwrite ON",
         (Lang::Es, Key::OverwriteOn) => "Sobrescribir ACTIVADO",
         (Lang::En, Key::OverwriteOff) => "Overwrite OFF",
@@ -406,6 +410,7 @@ mod tests {
         Key::Saved,
         Key::LnCol,
         Key::StartupHints,
+        Key::ExplorerTitle,
         Key::OverwriteOn,
         Key::OverwriteOff,
         Key::OpenFile,

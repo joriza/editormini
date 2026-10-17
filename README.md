@@ -6,8 +6,9 @@ Editor de texto para terminal (TUI) con la **forma de uso de Visual Studio Code*
 
 ## Estado del proyecto
 
-- **Versión completada — v0.1.0 (Hito 1 + extensiones)**: editor base con pestañas, resaltado por extensión, i18n EN/ES, búsqueda/reemplazo (documento activo y cruzado), selección con portapapeles del sistema y movimientos VS Code, operaciones de línea, paleta de comandos y quick open, mouse, gutter de números de línea y exe portable. **236 tests verdes, build con 0 warnings.** Detalle: [avances.md](docs/avances.md).
-- **Versión en progreso — Hito 2 (planificado, aún sin código)**: paleta de comandos (`Ctrl+Shift+P`) y apertura difusa de archivos (`Ctrl+P`). Ruta completa: [plan.md](docs/plan.md).
+- **Versión completada — v0.1.0 (Hito 1 + extensiones)**: editor base con pestañas, resaltado por extensión, i18n EN/ES, búsqueda/reemplazo (documento activo y cruzado), selección con portapapeles del sistema y movimientos VS Code, operaciones de línea, paleta de comandos y quick open, mouse, gutter de números de línea y exe portable. Detalle: [avances.md](docs/avances.md).
+- **Hito 2 completado**: paleta de comandos (`Ctrl+Shift+P`/`F4`) y apertura difusa (`Ctrl+P`).
+- **Hito 3 en progreso**: explorador lateral (`Ctrl+B`/`F9`) — árbol del directorio del documento activo, 3 niveles iniciales expandibles bajo demanda, apertura de archivos con `Enter`.
 
 **Especificación:** [specifications.md](docs/specifications.md) — comportamiento completo, modelo de datos e i18n, agnóstico del lenguaje (referencia para una futura app hermana). Complementos: [hallazgos.md](docs/hallazgos.md) (decisiones con dato y defectos) y [métricas y estimación](docs/metricas-y-estimacion.md).
 
@@ -44,7 +45,7 @@ editormini examples/                # abre todos los samples de sintaxis
 | Escribir, Enter, Backspace, Delete | editar texto (con selección activa, Backspace/Delete borran lo seleccionado) |
 | `Insert` | alternar modo sobrescribir (indicador `OVR`) |
 | `Ctrl+S` o `F2` | guardar (en pestaña sin título abre Guardar como) |
-| `Ctrl+Q` o `F10` | salir (pregunta si hay cambios sin guardar: Y/N/C — acepta S en español) |
+| `Ctrl+Q` o `F10` | salir — siempre pide confirmación (Y/N/C; `Esc`/`Enter`/`N`/`C` cancelan y siguen en el editor) |
 | `Ctrl+W` | cerrar pestaña (pregunta si hay cambios) |
 | `Ctrl+PgDn` / `Ctrl+PgUp` | pestaña siguiente / anterior (cicla) |
 | `Ctrl+1` | ir al último documento del panel 1 (`Ctrl+2` reservada para el panel 2) |
@@ -57,6 +58,8 @@ editormini examples/                # abre todos los samples de sintaxis
 | `Ctrl+O` | abrir archivo: navegador del directorio del documento activo — carpetas con `/` (Enter entra), `..` sube, tipeá para filtrar, `↑`/`↓`/`Home`/`End`/`PgUp`/`PgDn` te movés, `Enter` abre, `Esc` cancela (también acepta escribir una ruta directamente) |
 | `Ctrl+Shift+P` o `F4` | paleta de comandos: búsqueda difusa sobre todos los comandos con sus atajos (`↑`/`↓` elige, `Enter` ejecuta, `Esc` cancela) |
 | `Ctrl+P` | apertura difusa: pestañas abiertas primero, después los archivos del directorio del documento activo; con la lista vacía, `Enter` abre la ruta tipeada |
+| `Ctrl+B` o `F9` | explorador lateral: cerrado lo abre con foco; visible sin foco lo enfoca; enfocado lo cierra. Arranca **abierto sin foco** si no hay archivos cargados, **cerrado** si hay al menos uno |
+| Explorador con foco | `↑`/`↓` mueven la selección; `→` expande/colapsa la carpeta; `←` colapsa la carpeta (sobre un archivo, sube a la carpeta expandida más cercana); `Enter` abre el archivo (cierra el panel) o expande/colapsa la carpeta; `Esc` cierra el panel. Sin foco el panel solo se ve: el editor conserva todas las teclas. La raíz del árbol sigue al documento activo; 3 niveles expandidos al inicio, más profundos bajo demanda |
 | `Ctrl+F` | buscar en el documento activo (diálogo con contador; `Enter`/`F3` siguiente, `Shift+Enter`/`Shift+F3` anterior, `Esc` cierra; opciones case/regex a futuro) |
 | `Ctrl+H` | reemplazar en el documento activo (diálogo con pestaña entre Query/Replace —`Tab` cambia de campo—, `Ctrl+Enter` o `F5` reemplaza la coincidencia actual, `F6` reemplaza todo con confirmación Y/N) |
 | `Ctrl+Shift+F` | buscar en todos los documentos abiertos (itera coincidencias en orden de pestañas, cambia de pestaña al cruzar límites, muestra título del doc actual; `Esc` restaura la pestaña de inicio si no se navegó) |
