@@ -1289,11 +1289,9 @@ impl App {
     }
 
     fn request_quit(&mut self) {
-        if self.docs.iter().any(Document::is_modified) {
-            self.confirm = Some(ConfirmKind::Quit);
-        } else {
-            self.quit = true;
-        }
+        // Always show the confirmation dialog so the user never exits by
+        // accident — N is the safe default (Enter / Esc / N all mean "don't quit").
+        self.confirm = Some(ConfirmKind::Quit);
     }
 
     /// Save the focused tab's view, then focus `index` and restore its view.
@@ -1631,7 +1629,7 @@ impl App {
             (ConfirmKind::ReplaceAll(_, _), KeyCode::Char('n' | 'N')) => {
                 self.confirm = None;
             }
-            (_, KeyCode::Char('c' | 'C')) | (_, KeyCode::Esc) => self.confirm = None,
+            (_, KeyCode::Char('c' | 'C') | KeyCode::Esc | KeyCode::Enter) => self.confirm = None,
             _ => {}
         }
     }
@@ -3449,6 +3447,27 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_q_always_asks_confirmation_even_without_modified_docs() {
+        // Quit must always ask for confirmation — even when nothing was changed.
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        assert!(!app.doc().is_modified());
+        app.on_key(ctrl(KeyCode::Char('q')));
+        assert_eq!(app.confirm, Some(ConfirmKind::Quit), "confirmation must be shown regardless of changes");
+        assert!(!app.quit, "must not quit directly — waits for explicit confirmation");
+    }
+
+    #[test]
+    fn ctrl_q_esc_cancels_and_keeps_editor_open() {
+        // Default behaviour is NO: Esc (or Enter / C) cancels and keeps the editor open.
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('q')));
+        assert_eq!(app.confirm, Some(ConfirmKind::Quit));
+        app.on_key(plain(KeyCode::Esc));
+        assert_eq!(app.confirm, None);
+        assert!(!app.quit, "Esc must cancel and keep the editor open");
+    }
+
+    #[test]
     fn ctrl_q_n_quits_without_saving() {
         let dir = temp_dir("quitno");
         let path = dir.join("q.txt");
@@ -3464,6 +3483,19 @@ mod tests {
             "quit without saving must not write"
         );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn ctrl_q_enter_cancels_and_keeps_editor_open() {
+        // Enter is the safe-default: cancels confirmation and keeps the editor open.
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "keep me");
+        app.on_key(ctrl(KeyCode::Char('q')));
+        assert_eq!(app.confirm, Some(ConfirmKind::Quit));
+        app.on_key(plain(KeyCode::Enter));
+        assert_eq!(app.confirm, None);
+        assert!(!app.quit, "Enter must cancel confirmation and keep the editor open");
+        assert_eq!(app.doc().line(0), "keep me");
     }
 
     #[test]

@@ -1,140 +1,249 @@
 editormini
 
 
-## Estado actual del proyecto
+Diferencias entre las bases de datos orientadas a columnas y las relacionales orientadas a filas.
+Ventajas y beneficios de cada una.
 
-- **Versión completada — v0.1.0 (Hito 1 + extensiones)**: editor base con pestañas, resaltado por extensión, i18n EN/ES, búsqueda/reemplazo (documento activo y cruzado), selección con portapapeles del sistema y movimientos VS Code, operaciones de línea, paleta de comandos y quick open, mouse, gutter de números de línea y exe portable. **248 tests verdes, build con 0 warnings.** Detalle: [avances.md](avances.md).
-- **Versión en progreso — Hito 2 (completado)**: paleta de comandos (`Ctrl+Shift+P`) y apertura difusa de archivos (`Ctrl+P`). Ruta completa: [plan.md](plan.md).
-- **Hito 3 (planificado, aún sin código)**: explorador lateral con árbol de archivos del proyecto.
+por que las bases de datos orientadas a columnas son mas eficientes para la analítica.
 
-## Especificación: [specifications.md](specifications.md)
+Que son los formatos Parquet, CSV y JSON
 
-Comportamiento completo, modelo de datos e i18n, agnóstico del lenguaje (referencia para una futura app hermana). Complementos: [hallazgos.md](hallazgos.md) (decisiones con dato y defectos) y [métricas y estimación](metricas-y-estimacion.md).
+duckdb puede leer un fichero que corresponde a una base sqlite3
 
-## Compilar
 
-Requiere Rust estable (probado con 1.99, toolchain MSVC).
 
-```bash
-cargo build --release
-# El ejecutable queda en target/release/editormini.exe
-```
 
-> El ejecutable de release es **totalmente estático** (CRT enlazado estático): no requiere la redistribución de Visual C++ (VCRUNTIME140.dll) ni ninguna dependencia runtime adicional más allá de Windows mismo.
 
-## Usar
 
-```bash
-editormini                          # documento nuevo sin título
-editormini nota.md main.rs          # varios archivos = varias pestañas
-editormini --lang es codigo.rs      # fuerza la interfaz al español
-editormini examples/                # abre todos los samples de sintaxis
-```
+La barra completa de color verde está bien, prefiero que sea un verde mas apagado, pero visible.
+Cuando la seleccion era en video inverso, funcionaba correcta, ahora inicia como si todo estuviera seleccoinado. Es un poco raro de explicar con palabras.
 
-> Consejo: ejecutarlo dentro de **Windows Terminal** o el terminal de VS Code.
-> En Git Bash/mintty, el control de flujo del terminal se come `Ctrl+S` (por eso también existe `F2`).
+Ctrl+PgUp desafectado, pero deberia funcionar para desplazamiento en la misma carpeta de forma mas rapida que con las teclas flecha del cursor.
 
-## Teclas actuales
+BackSpace al directorio funciona bien.
 
-| Tecla | Acción |
-|---|---|
-| Flechas, Home, End, PgUp, PgDn | mover el cursor |
-| Escribir, Enter, Backspace, Delete | editar texto (con selección activa, Backspace/Delete borran lo seleccionado) |
-| `Insert` | alternar modo sobrescribir (indicador `OVR`) |
-| `Ctrl+S` o `F2` | guardar (en pestaña sin título abre Guardar como) |
-| `Ctrl+Q` o `F10` | salir (pregunta si hay cambios sin guardar: Y/N/C — acepta S en español) |
-| `Ctrl+W` | cerrar pestaña (pregunta si hay cambios) |
-| `Ctrl+PgDn` / `Ctrl+PgUp` | pestaña siguiente / anterior (cicla) |
-| `Ctrl+1` | ir al último documento del panel 1 (`Ctrl+2` reservada para el panel 2) |
-| `Ctrl+Z` / `Ctrl+Y` (o `Ctrl+Shift+Z`) | deshacer / rehacer (historial acotado por pestaña; cada tanda de tipeo es un paso) |
-| `F3` / `Ctrl+Shift+S` | guardar todo (pestañas con ruta; omite sin título) — fuera del diálogo de búsqueda |
-| `Alt+↑` / `Alt+↓` | mover la línea del cursor una posición arriba/abajo (con selección activa mueve todo el bloque seleccionado; la selección viaja con él) |
-| `Ctrl+K` (o `Ctrl+Shift+K`) | eliminar la línea completa del cursor (con selección activa borra todas las líneas seleccionadas; la columna se conserva) |
-| `F8` | eliminar la línea del cursor — respaldo de `Ctrl+Shift+K` cuando el terminal no entrega los modificadores (si al pulsarlo aparece una `K` en el texto, tu terminal/PTY está comiendo el Shift) |
-| `Ctrl+G` | ir a línea: número de línea destino (`Enter` salta, `Esc` cancela; fuera de rango se ajusta a la última línea) |
-| `Ctrl+O` | abrir archivo: navegador del directorio del documento activo — carpetas con `/` (Enter entra), `..` sube, tipeá para filtrar, `↑`/`↓`/`Home`/`End`/`PgUp`/`PgDn` te movés, `Enter` abre, `Esc` cancela (también acepta escribir una ruta directamente) |
-| `Ctrl+Shift+P` o `F4` | paleta de comandos: búsqueda difusa sobre todos los comandos con sus atajos (`↑`/`↓` elige, `Enter` ejecuta, `Esc` cancela) |
-| `Ctrl+P` | apertura difusa: pestañas abiertas primero, después los archivos del directorio del documento activo; con la lista vacía, `Enter` abre la ruta tipeada |
-| `Ctrl+F` | buscar en el documento activo (diálogo con contador; `Enter`/`F3` siguiente, `Shift+Enter`/`Shift+F3` anterior, `Esc` cierra; opciones case/regex a futuro) |
-| `Ctrl+H` | reemplazar en el documento activo (diálogo con pestaña entre Query/Replace —`Tab` cambia de campo—, `Ctrl+Enter` o `F5` reemplaza la coincidencia actual, `F6` reemplaza todo con confirmación Y/N) |
-| `Ctrl+Shift+F` | buscar en todos los documentos abiertos (itera coincidencias en orden de pestañas, cambia de pestaña al cruzar límites, muestra título del doc actual; `Esc` restaura la pestaña de inicio si no se navegó) |
-| `Ctrl+Shift+H` | reemplazar en todos los documentos abiertos (reemplaza actual y avanza cambiando pestañas; reemplazar todo con confirmación única muestra total de ocurrencias y número de archivos; docs solo-lectura se omiten; deshacer por pestaña) |
-| `Esc` | cierra el diálogo activo (en búsqueda, restaura cursor/pestaña si no se navegó); en el editor, colapsa la selección |
-| `Ctrl+C` / `Ctrl+Insert` | copiar (selección activa; sin selección copia la línea actual) |
-| `Ctrl+X` / `Shift+Supr` | cortar (selección activa; sin selección corta la línea actual) |
-| `Ctrl+V` / `Shift+Insert` | pegar (si hay selección activa la reemplaza; un `Ctrl+Z` deshace todo el reemplazo) |
-| `Shift+Flechas` / `Shift+Home/End` / `Shift+PgUp/PgDn` | seleccionar texto (ancla fija, como VS Code) |
-| `Ctrl+←` / `Ctrl+→` | mover el cursor de a palabras |
-| `Ctrl+Shift+←` / `Ctrl+Shift+→` | seleccionar de a palabras |
-| `Ctrl+Home` / `Ctrl+End` | inicio / fin del documento (con `Shift` selecciona) |
-| Clic izquierdo en el editor | colocar el cursor (se adapta al desplazamiento) |
-| Números de línea | margen de números de línea siempre visible, alineados a la derecha, con énfasis en la línea del cursor |
-| Clic izquierdo en una pestaña | cambiar al documento de esa pestaña |
-| Rueda del ratón (arriba/abajo) | desplazar la vista (mismo rango que PgUp/PgDn) |
+----
 
-> La barra de estado inferior muestra, a la derecha, el lenguaje del documento y la **versión de compilación** (p. ej. `v0.1.0·1012-1830`, sello UTC `MMDD-HHMM` que cambia en cada build): referencia rápida para saber qué ejecutable estás probando.
+el color verde de la barra de fila activa está bien.
 
-## Configuración
+La seleccion sigue siendo extraña, inicia todo verde, y a medida que bajo se vá deseleccionando y la parte superior de esa selecion ahora parcial es la fila activa.
 
-`editormini.json` junto al ejecutable (portable-first; en desarrollo queda en `target/debug/`). Si no existe, se usan los valores por defecto; si está mal formado, el editor avisa y corta:
+Ctrl+PgUp / Ctrl+PgDn de a 10 pasos está bien, pero anote para realizar luego, que sea la cantidad de filas de la pantalla, como hacer total commander.
 
-```json
-{
-  "language": "en",
-  "theme": "dark-plus",
-  "export": {},
-  "open_files": ["/path/to/last.txt", "/path/to/other.md"]
-}
-```
+-----
 
-### Sesiones
+no sale con Esc aunque no tenga dialogo activo, está bien, mejor que solo salga con F10
 
-Al cerrar el editor, las rutas de las pestañas abiertas (solo las que tienen archivo; las pestañas sin título se omiten) se guardan en `open_files`. Al siguiente arranque, **sin pasos archivos por línea de comandos**, el editor las reabre tal cual. Archivos que hayan sido eliminados entre tanto se saltean sin bloquear el arranque; si no queda ninguna pestaña válida, abre una sin título como siempre.
+Al confirmar el borrado con F8 se queda colgado en el mensaje Processing...
+aunque si elimina el directorio
 
-Los paths de la CLI siguen ganando: `editormini a.txt b.txt` abre esos archivos y ignora la sessión guardada.
+El cuadro que muestra al presionar F7 u F8 debe tener un marco para que sea visible sus limites.
 
-## Lenguajes soportados
+Vaya documentando todos los cambios y correcciones de errores para tener en cuenta para cuando se desarrolle la aplicacion hermana y no caer en los mismo errores o cambios
 
-El resaltado por extensión está curado para (hito 1):
+----
 
-- **Rust** (`.rs`)
-- **Go** (`.go`)
-- **JavaScript/TypeScript** (`.js`, `.ts`, `.tsx`, `.jsx`)
-- **Python** (`.py`)
-- **C/C++** (`.c`, `.cpp`, `.h`, `.hpp`)
-- **C#** (`.cs`)
-- **JSON** (`.json`)
-- **TOML** (`.toml`)
-- **YAML** (`.yaml`, `.yml`)
-- **Markdown** (`.md`)
-- **HTML/CSS** (`.html`, `.css`)
-- **XML** (`.xml`)
-- **Shell** (`.sh`, `.bat`)
+Ahora los menu contextuales tienen borde con titulo centrado.
+Deberían tener menos altura, le sobran varios renglones.
 
-Fallbacks: `toml → yml`, `ts/tsx/jsx → js`. `.ps1` queda como texto plano hasta cargador de gramáticas externas.
+F8 Funciona correctamente, ya no se cuelga y realiza el borrado.
 
-## Estructura del proyecto
+Ademas detecté que presionando Home / End la linea activa se posiciona en la primera y la ultima respectivamente. Eso está bien.
 
-```
-src/
-  main.rs      CLI, carga de archivos, ciclo de vida del terminal
-  app.rs       bucle de eventos, teclas, dibujo, pestañas, modales
-  document/    modelo de documento (líneas, BOM, fin de línea, solo-lectura)
-  highlight.rs resaltado de sintaxis por extensión (syntect → spans de ratatui)
-  theme.rs     paleta de la UI (Dark+ de VS Code; Light+ preparado)
-  pane.rs      árbol de paneles (preparado para pantalla dividida)
-  i18n.rs      catálogo de mensajes EN/ES (exhaustivo por compilación)
-  config.rs    configuración JSON junto al ejecutable
-  build.rs     sello de compilación UTC (MMDD-HHMM) que muestra la barra de estado
-docs/          plan del proyecto, especificaciones, avances, hallazgos y métricas
-examples/      samples de código por lenguaje para probar resaltado de sintaxis
-odd/           tareas del flujo de trabajo (ODD)
-```
+-----
 
-## Rumbo (resumen)
+Copia bien.
+Solo detalles.
+Al presionar F8 el cuadro de confirmacion le falta altura, agregue 2 renglones de alto.
+Mientras está copiando.
+Podría agregar 2 barras de estado.
+Una para el % del archivo actual.
+Y la segunda para el % del total?
+Y luego del 2% un estimado del tiempo restante y actualizarlo la estimación periódicamente, como hace el total commander.
+Consulta, estas situaciones de funcionamiento. Puedes verificarlas en el codigo del total commander que está instalado en el sistema? Es que hay varias opciones de funcionamiento del total commander que son un standard desde hace décadas que no estás contemplando.
 
-Pantalla dividida con sincronización para comparar archivos, paleta de comandos, explorador lateral, deshacer completo, LSP/linter, y exportación a PDF para Markdown y Typst. Detalle completo en [docs/plan.md](docs/plan.md).
+------
 
-## Licencia
+necesito realizar un editor que de a poco se parezca a visual studio en la forma de uso. Pero tiene que ser para terminal de texto (TUI)
+Aqui tiene un par de ejemplos c:\Users\USER\Downloads\micro-2.0.15\micro.exe y c:\Users\USER\Downloads\edit-2.0.0-x86_64-windows\edit.exe 
+para analizarlos tiene el proyecto que sirve para ingenieria inversa en d:\Desarrollo\rea\
 
-MIT
+-----
+
+Lo que busco es un editor para reemplazar visual studio, que sea agil, consuma pocos recursos, que tenga su estetica y branding. y que funciona en terminal (TUI)
+
+-----
+
+Menu default en ingles estilo VSCode, pero que se pueda cambiar a español, tambien como vscode.
+Colores y temas, vscode standard oscuro.
+Preparado para modo claro / oscuro
+Dejar preparado para luego: Dividir pantalla, modificar division con el mouse, sincronizar las 2 divisiones, para cortejar 2 archivos.
+
+-----
+
+Cuando tenga mas de 1 archivo abierto, con Ctrl+PGDown y Ctrl+PgUp se pasa a los archivos siguientes. de cada panel, cuando se llega a un borde se pasa al otro panel.
+Ctrl+1 va al ultimo documento del panel 1 y análogo con Ctrl+2
+
+-----
+
+Soportar archivos markdown. 
+Contemplar a futuro exportar a pdf con plantilla css que le dé formato (estos pueden ser archivos externos, tanto el generador de pdf y el .css)
+contemplar a futuro soporte de formato Typst y exportacion a pdf.
+
+-----
+
+Si no es muy caro, contemplar la posibilidad de que tenga modo de uso modal, aunque sea minimo y opcional activable.
+
+-----
+
+Al escribir siempre como si estuviera modo insertar activado.
+Al presionar Crtl+S no parecia grabar. Preguntó al salir, pero parece que tampoco grabó nada.
+
+----
+
+Cree documentacion y guardelo en una carpeta. Plan, avances, hallazgo. Ruta de vida del proyecto.
+Agrege readme en idioma español.
+
+-----
+
+Agregar a las lista por hacer.
+Ctrl+Shift+S Graba todos los documentos abiertos que necesiten grabarse.
+
+-----
+
+Guarde todas las especificaciones en un documento para una posible aplicacion hermana en otro lenguaje para otra plataforma.
+Realice todas las tareas que sean posibles en sub agentes. Para minimizar tiempos y preservar el contexto principal.
+
+----
+
+Consulta.
+Que es mas efectivo.
+Ir probando por etapas o realizar todas las etapas de una y revisar al final?
+Otra Consulta
+Que es mas efectivo cuando los cambios son costosos.
+Anotar el error, salvarlo para que no pinche, tratar de evitarlo y corregir todo al final aunque involucre comenzar de cero.
+
+
+
+Continua.
+Recuerda Realizar todas las tareas que sean posibles en sub agentes. Para minimizar tiempos y preservar el contexto principal.
+Si ejecuto por segunda vez el comando cargo run -- src/main.rs Cargo.toml docs/hallazgos.md porque hubo cambios, importan los archivos anteriores o los sobreescribe sin problemas.
+
+-----
+
+Guarda esto en tu memoria persistente para todos los proyectos. Esto tiene prioridad para funturos proyectos.
+Si pasa como en este proyecto, que hay cosas que traen problemas por no tener el repositorio git al iniciar sesion, frena y avísame, y si te pido continuar, no dejes de avisar recurrentemente, es un incordio esto que pasa, que se solucion con solo salir y volver a ingresar.
+
+
+Como editor de codigo debería mostrar los numero de linea.
+Ctrl+F para busqueda de texto en el documento activo con cuadro de dialogo. A futuro que permita seleccionar algunas opciones como case sensitive busqueda regex.
+Ctrl+Shift+F Para busqueda en todos los archivos abiertos.
+Similar para las busquedas con Ctrl+H y su variante.
+
+
+1. Tu verificación visual de la tarea 8: probá Ctrl+Shift+S (guardar todo), Ctrl+O (abrir), y Ctrl+S sobre un tab sin título (Guardar-como).
+2. Tarea 7 (auditoría i18n) → 9 (mouse) → 10 (status bar) → 11 (release portable).
+
+
+Colocar un help en la parte inferios con los comandos mas elementales al estilo nano.
+Al elegir abrir un archivo desde dentro del editor que sea mas amigable en interactivo que solo preguntar el archivo.
+
+
+De la ayuda inferior quite alguna opciones, está muy cargado y se pierde legibilidad, quite deshacer, es obvios igual que el buscar.
+La barra de busqueda en color amarillo no me convence mucho la combinacion, pero zafa, oscurezca el texto allí, se pierde legibilidad con color gris y fondo amarillo.
+Contempe a futuro la posibilidad de multicursor si no es muy caro. Luego veremos variantes de ella, como tiene vscode.
+
+
+La barra de busqueda ahora es legible, la proxima busqueda se confirma con enter, pero debería aceptar ademas F3, Ademas la barra deberia ser mas pequeña como en vscode. Anotar para luego. 
+Reemplazar, no entiendo como hacer para colocar el texto por el que se debe reemplazar.
+En la barra inferior no queda nada, solo debia quitar deshacer y Busqueda Global.
+
+
+Al elegir abrir un archivo desde dentro del editor que sea mas amigable en interactivo que solo preguntar el archivo.
+Asi como Shif+Enter retrocede lo debe hacer Shift+F3.
+Ahora se puede reemplazar, anotar para hacerlo mas similar a vscode.
+La barra inferior ahora no se borra.
+Dependiendo del nombre del archivo, el final del nombre queda pegado a las coordenadas del cursor.
+Como en VScode el tipo de archivo reconocido debe estar mas a la derecha.
+Agregar poder seleccionar texto para luego copiar con ctrl+C y pegar con ctrl+v. mantener compatibilidad con Shift+Insert y Shift+Supr como era antes.
+Poder moverse por el texto con Ctrl+Flecha derecha e izquierda que avance de a palabra y si se agrega Shit que lo haga seleccionando texto.
+Presente los desplazamientos standard de VScode, eso está documentado.
+
+
+Shift+fecha Selecciona texto, pero si hay texto seleccionado, presionar suprimir o backspace borra solo el caracter, cuando debe borrar lo seleccionado.
+Ctrl+flechas se mueve por palabras, es correcto.
+Ctrl+Shift+flechas Selecciona por palabras, es correcto
+Shift+PgUp/PgDn selecciona con ancla fija, es correcto.
+Ctrl+O abre un pequeño menu con una lista de los archivos de la carpeta, bien. No devuelve el texto de ayuda de la barra inferior. Debe ser mas ancha la ventanida que muestra los nombres de los archivos, no completa nombre de archivos de mas de unos pocos caracteres en el nombre. Agregar un pequeño borde para que se noten los limites del la ventanita.
+Ctrl+W cierra pestaña, pregunta si necesita ser guardado, es correcto
+
+
+Borrar texto seleccionado, ok
+Ventana de archivos a abrir, ok. Ademan no elimina el texto ayuda de la barra inferior.
+Ya que el clipboard queda para luego.
+Pensar bien que se va a colocar, para que sin gastar demasiado tenga cosas utiles, como un historial de las ultimas n copiar al porta papeles o funcionalidades similares.
+Que tenga una secuencia de teclas para eliminar una fila completa Ctrl+Shit+k.
+Si se presiona Shift+Flecha arriba/abajo desplace una linea completa en esa direccion.
+Ctrl+G para ir a una linea en particular.
+El texto seleccionado que se elimine al presionar Backspace o Suprimir
+Tiene algo de seleccion multicursor?
+Ctrl+Shift con flechas para seleccion rectangular.
+
+
+ ┌───┬─────────────────────────────────────────────────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ # │ Qué                                                                         │ De dónde                                                                                           │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 1 │ Colores del resaltado Dark+: abrir .rs, .md, .json y validar la paleta      │ Tarea 6 — único ítem que quedó informal de la aceptación del Hito 1                                │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 2 │ i18n: correr en inglés (editormini) y español (--lang es) y mirar todos los │ Tarea 7 — formalmente sin cerrar                                                                   │
+ │   │ textos                                                                      │                                                                                                    │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 3 │ Búsqueda/reemplazo cruzado: Ctrl+Shift+F y Ctrl+Shift+H                     │ De Ctrl+F/Ctrl+H ya probaste varias rondas (el log lo registra); la variante cruzada no quedó      │
+ │   │                                                                             │ cerrada en el doc                                                                                  │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 4 │ Exe portable en una máquina SIN Visual C++ Redistributable                  │ Tarea 11 — en esta máquina ya lo verificaste; falta la máquina limpia                              │
+ ├───┼─────────────────────────────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ 5 │ (Opcional) El diff de docs recién pusheado (4f80b3d..a41a1e1)               │ Sincronización de documentación de hoy                                                             │
+ └───┴─────────────────────────────────────────────────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+Proponga plan de mejores practicas ahora que se utiliza github. Sin irse al extremo, pero algo mas que solo pushear siempre a main
+Anotar como funcionalidades a agregar cuando sea el momento adecuado:
+- Que recuerde los archivos de la ultima sesion, los guarda al salir. Si es posible, que los guarde periódicamente por si se sale abruptamente.
+- Mejorar el menu Ctr+O es un poco pobre. Proponga cambios efectivos pero con el menor costo posible y el caso ideal aunque tenga mas costo.
+Consulta. Como se Abre el segundo panel?
+Consulta. El readme indica que lenguajes soporta resaltado de colores? Recuerdeme por pantalla cuales son actualmente.
+
+
+Revisiones.
+1. Colores del resaltado Dark+: abrir .rs, .md, .json y validar la paleta
+Revisadas extensiones .py .cs .md .json
+Solo .md no muestra el codigo de colores como lo hace visual code
+1. No hay muchos menus todavía pero parece que funciona bien en ingles.
+2. Funciona reemplazo de todos los documentos activos.
+3. En las pocas maquinas que no ha funcionado no he podido determinar la causa, luego pasaré reporte de equipo que entreca cpu-z para ver si aporta datos suficiente.
+4. (Opcional) El diff de docs recién pusheado (4f80b3d..a41a1e1)   No entendí cual es esta funcionalidad para verificarla.
+
+
+ Tu cola de revisión (actualizada)
+ 1. Nuevo — probar la paleta: Ctrl+Shift+P (o F4), filtrá tipeando, Enter ejecuta; Ctrl+P quick open (pestañas primero, luego archivos del directorio; ruta tipeada si no hay
+    candidatos).
+ 2. Pendientes previos: colores Dark+ (tarea 6), i18n EN/ES (tarea 7), búsqueda cruzada Ctrl+Shift+F/H, exe portable en máquina limpia.
+ 3. Decisiones: LICENSE (MIT declarado, sin archivo), archivos scratch ya publicados.
+
+
+.md ahora muestra con colores
+No comprendo que es el menu Ctrl+Shift+P tampoco se como salir de el luego de que ingreso en una de las opciones.
+
+----
+
+Qué tiene esta build respecto a la que estabas probando:
+- Rótulos de la paleta y quick open legibles (antes gris tenue) y con la salida explícita: ↑↓ elegir · Enter ejecutar · Esc salir · tipeá para filtrar — en español si usás --lang es o
+  la config.
+- Mismo criterio en el popup de Ctrl+O.
+- Los colores de .md que ya confirmaste siguen, claro.
+Para probar la paleta con calma: Ctrl+Shift+P → tipeá save o line → mirá cómo filtra → Esc para salir sin ejecutar → volvé a entrar y ejecutá algo con Enter. Doble uso y el concepto
+queda claro.
+
+
+
