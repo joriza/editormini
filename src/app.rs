@@ -2764,22 +2764,111 @@ impl App {
 
     pub fn draw(&mut self, f: &mut Frame) {
         let area = f.area();
-        let [tabs_area, editor_area, status_area] = Layout::vertical([
+        let [tabs_area, main_area, status_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(1),
             Constraint::Length(1),
         ])
         .areas(area);
 
+        // Explorer panel (milestone 3 T4): a fixed left column when open;
+        // the editor shrinks to the remaining width. Panel is min 24 cols,
+        // at most ~40% of the terminal.
+        let (explorer_area, editor_area) = if self.explorer.is_some() {
+            // Max first, then min: a narrow terminal gets the full width
+            // instead of a clamp(min > max) panic.
+            let panel_w = (main_area.width * 2 / 5)
+                .max(24)
+                .min(main_area.width);
+            let [panel, editor] = Layout::horizontal([
+                Constraint::Length(panel_w),
+                Constraint::Min(1),
+            ])
+            .areas(main_area);
+            (Some(panel), editor)
+        } else {
+            (None, main_area)
+        };
+
         self.viewport_h = editor_area.height as usize;
         self.viewport_w = editor_area.width as usize;
         self.clamp_scroll();
 
         self.draw_tabs(f, tabs_area);
+        if let Some(panel) = explorer_area {
+            self.draw_explorer(f, panel);
+        }
         self.draw_editor(f, editor_area);
         self.draw_status(f, status_area);
         self.draw_open_list(f, editor_area);
         self.draw_palette(f, editor_area);
+    }
+
+    /// Side explorer panel (milestone 3 T4): bordered left column listing
+    /// the visible tree rows. Directories show a `▼`/`▶` marker by
+    /// expansion state plus a `/` suffix; the selected row uses prompt
+    /// colors while the panel has focus (dim fg only when unfocused).
+    /// Scrolling keeps the selection visible (same rule as the open list).
+    fn draw_explorer(&mut self, f: &mut Frame, area: ratatui::prelude::Rect) {
+        let Some(state) = self.explorer.as_ref() else {
+            return;
+        };
+        let inner_h = area.height.saturating_sub(2) as usize;
+        let selected = state.selected;
+        let skip = if inner_h == 0 {
+            selected
+        } else {
+            selected.saturating_sub(inner_h - 1)
+        };
+        let focused = self.explorer_focused;
+        let theme = self.theme;
+        let lines: Vec<Line> = state
+            .rows
+            .iter()
+            .enumerate()
+            .skip(skip)
+            .take(inner_h)
+            .map(|(i, row)| {
+                let indent = "  ".repeat(row.depth - 1);
+                let (marker, name) = if row.is_dir {
+                    (
+                        if row.expanded { "▼ " } else { "▶ " },
+                        format!("{}/", row.name),
+                    )
+                } else {
+                    ("  ", row.name.clone())
+                };
+                let is_selected = skip + i == selected;
+                let style = if is_selected && focused {
+                    Style::new()
+                        .fg(theme.prompt_fg)
+                        .bg(theme.prompt_bg)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_selected {
+                    Style::new().fg(theme.prompt_fg).bg(theme.bg)
+                } else if row.is_dir {
+                    Style::new().fg(theme.accent).bg(theme.bg)
+                } else {
+                    Style::new().fg(theme.fg).bg(theme.bg)
+                };
+                Line::from(Span::styled(format!("{indent}{marker}{name}"), style))
+            })
+            .collect();
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(theme.accent))
+            .title(Span::styled(
+                "Explorer",
+                Style::new()
+                    .fg(theme.line_number_fg)
+                    .add_modifier(Modifier::DIM),
+            ));
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .style(Style::new().bg(theme.bg)),
+            area,
+        );
     }
 
     /// Interactive Ctrl+O candidate list: a bordered popup at the bottom of
@@ -4396,6 +4485,106 @@ mod tests {
         // F10 must still request quit.
         app.on_key(plain(KeyCode::F(10)));
         assert!(app.confirm.is_some(), "F10 must still ask to quit");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn explorer_panel_renders_border_and_tree_rows() {
+        let dir = explorer_fixture("render");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buf = terminal.backend().buffer();
+        // Panel spans 80*2/5 = 32 cols: border corners at x=0/x=31.
+        assert_eq!(buf[(0, 1)].symbol(), "┌", "panel top-left border");
+        assert_eq!(buf[(31, 1)].symbol(), "┐", "panel top-right border");
+        // First tree row (screen row 2) shows the first entry, emptydir/,
+        // with the expanded marker (depth-1 dirs auto-expand).
+        let row_text: String = (1..31).map(|x| buf[(x, 2)].symbol()).collect();
+        assert!(
+            row_text.contains("emptydir/"),
+            "dirs get a / suffix: {row_text:?}"
+        );
+        assert!(row_text.contains('▼'), "expanded dir marker: {row_text:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn explorer_panel_shrinks_editor_viewport() {
+        let dir = explorer_fixture("shrink");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        // Closed: the editor uses the full width.
+        terminal.draw(|f| app.draw(f)).unwrap();
+        assert_eq!(app.viewport_w, 80, "closed panel leaves the full width");
+        // Open: 80 - 32 = 48 cols for the editor, 8 rows under the bars.
+        app.on_key(ctrl(KeyCode::Char('b')));
+        terminal.draw(|f| app.draw(f)).unwrap();
+        assert_eq!(app.viewport_w, 48, "open panel shrinks the editor");
+        assert_eq!(app.viewport_h, 8);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn explorer_selected_row_highlighted_only_when_focused() {
+        let dir = explorer_fixture("highlight");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        // Unfocus: selected row is fg-only (no prompt bg).
+        app.explorer_focused = false;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buf = terminal.backend().buffer();
+        assert_ne!(
+            buf[(2, 2)].style().bg,
+            Some(app.theme.prompt_bg),
+            "unfocused selection must not use prompt colors"
+        );
+        // Focus it: the selected row gets prompt bg + bold.
+        app.explorer_focused = true;
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buf = terminal.backend().buffer();
+        assert_eq!(
+            buf[(2, 2)].style().bg,
+            Some(app.theme.prompt_bg),
+            "focused selection must use prompt colors"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn explorer_panel_scrolls_to_keep_selection_visible() {
+        let dir = temp_dir("render_scroll");
+        for i in 0..12 {
+            std::fs::write(dir.join(format!("f{i:02}.txt")), "x").expect("write file");
+        }
+        let doc = dir.join("f00.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        // 10-row terminal: 8 inner panel rows. Move to the last of 12 rows.
+        for _ in 0..11 {
+            app.on_key(plain(KeyCode::Down));
+        }
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 10)).unwrap();
+        terminal.draw(|f| app.draw(f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let visible: String = (2..8)
+            .map(|y| {
+                (1..31)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect();
+        assert!(visible.contains("f11.txt"), "last row visible: {visible:?}");
+        assert!(!visible.contains("f00.txt"), "top scrolled away: {visible:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -6147,6 +6336,9 @@ mod tests {
     fn selection_bg_rendered_dark_plus() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         app.set_theme(ThemeChoice::DarkPlus);
+        // This test pins selection rendering, not the panel: close the
+        // default-open explorer so the editor keeps the full 80 columns.
+        app.explorer = None;
         typed(&mut app, "hello");
         // Move cursor to col 1, then Shift+Right 4 times to select "ello" (cols 1-5).
         app.on_key(plain(KeyCode::Home));
@@ -6168,6 +6360,8 @@ mod tests {
     fn selection_bg_rendered_light_plus() {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         app.set_theme(ThemeChoice::LightPlus);
+        // Close the default-open explorer: this test pins selection colors.
+        app.explorer = None;
         typed(&mut app, "hello");
         // Move cursor to col 1, then Shift+Right 4 times to select "ello" (cols 1-5).
         app.on_key(plain(KeyCode::Home));
