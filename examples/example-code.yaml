@@ -1,0 +1,29 @@
+# example-code.yaml — YAML sample
+server:
+  host: localhost
+  port: 8080
+  
+database:
+  engine: postgresql
+  connection:
+    host: db.example.com
+    port: 5432
+    name: myapp
+    credentials:
+      username: admin
+      password: secret123
+      
+features:
+  - name: authentication
+    enabled: true
+    timeout: 30
+  - name: caching
+    enabled: false
+    ttl: 3600
+    
+metadata:
+  version: 2.1.0
+  description: "Example config with nested structures"
+  tags:
+    - production
+    - example
