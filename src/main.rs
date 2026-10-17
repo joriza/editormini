@@ -7,6 +7,7 @@ mod app;
 mod command;
 mod config;
 mod document;
+mod explorer;
 mod fuzzy;
 mod highlight;
 mod i18n;
@@ -207,7 +208,7 @@ mod tests {
         // session, and confirm the file now records both paths.
         let docs = load_restored_documents(&reloaded);
         assert_eq!(docs.len(), 2);
-        let mut app = app::App::new(docs, Lang::En);
+        let app = app::App::new(docs, Lang::En);
         // Drop the untitled fallback doc that load_restored_documents would
         // have added when the list was empty — here we have real paths.
         save_session(&app, &mut config, None);

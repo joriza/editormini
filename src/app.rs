@@ -21,6 +21,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use crate::command::{Command, CommandKind, all_commands};
 use crate::config::ThemeChoice;
 use crate::document::{Document, DocumentError, EditRecord};
+use crate::explorer;
 use crate::fuzzy;
 use crate::highlight;
 use crate::i18n::{self, Key, Lang};
@@ -273,6 +274,8 @@ pub struct App {
     pub search_options: SearchOptions,
     /// Command palette / quick-open modal (milestone 2).
     pub palette: Option<PaletteState>,
+    /// Side file explorer panel (milestone 3). None = closed.
+    pub explorer: Option<explorer::ExplorerState>,
     /// Overwrite mode (Insert key). Off by default: VS Code-style insertion.
     pub overwrite: bool,
     /// Transient status message. Persists until the next edit action or the
@@ -285,6 +288,7 @@ pub struct App {
 
 impl App {
     pub fn new(docs: Vec<Document>, lang: Lang) -> Self {
+        let has_file = docs.iter().any(|d| d.path().is_some());
         let views = docs.iter().map(|_| DocView::default()).collect();
         let histories = (0..docs.len()).map(|_| History::new()).collect();
         let selections = (0..docs.len()).map(|_| None).collect();
@@ -310,6 +314,14 @@ impl App {
             search: None,
             search_options: SearchOptions::default(),
             palette: None,
+            /// S1: open by default when no files are loaded, closed otherwise.
+            explorer: if has_file {
+                None
+            } else {
+                Some(explorer::ExplorerState::open_at(
+                    std::env::current_dir().unwrap_or_default(),
+                ))
+            },
             overwrite: false,
             status: i18n::t(lang, Key::StartupHints).to_string(),
             lang,
@@ -3452,8 +3464,15 @@ mod tests {
         let mut app = App::new(vec![Document::new_untitled()], Lang::En);
         assert!(!app.doc().is_modified());
         app.on_key(ctrl(KeyCode::Char('q')));
-        assert_eq!(app.confirm, Some(ConfirmKind::Quit), "confirmation must be shown regardless of changes");
-        assert!(!app.quit, "must not quit directly — waits for explicit confirmation");
+        assert_eq!(
+            app.confirm,
+            Some(ConfirmKind::Quit),
+            "confirmation must be shown regardless of changes"
+        );
+        assert!(
+            !app.quit,
+            "must not quit directly — waits for explicit confirmation"
+        );
     }
 
     #[test]
@@ -3494,7 +3513,10 @@ mod tests {
         assert_eq!(app.confirm, Some(ConfirmKind::Quit));
         app.on_key(plain(KeyCode::Enter));
         assert_eq!(app.confirm, None);
-        assert!(!app.quit, "Enter must cancel confirmation and keep the editor open");
+        assert!(
+            !app.quit,
+            "Enter must cancel confirmation and keep the editor open"
+        );
         assert_eq!(app.doc().line(0), "keep me");
     }
 
