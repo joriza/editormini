@@ -276,6 +276,9 @@ pub struct App {
     pub palette: Option<PaletteState>,
     /// Side file explorer panel (milestone 3). None = closed.
     pub explorer: Option<explorer::ExplorerState>,
+    /// Whether the explorer panel has keyboard focus. While false the
+    /// panel is only visible; the editor keeps every keybinding.
+    pub explorer_focused: bool,
     /// Overwrite mode (Insert key). Off by default: VS Code-style insertion.
     pub overwrite: bool,
     /// Transient status message. Persists until the next edit action or the
@@ -314,7 +317,7 @@ impl App {
             search: None,
             search_options: SearchOptions::default(),
             palette: None,
-            /// S1: open by default when no files are loaded, closed otherwise.
+            // S1: open by default when no files are loaded, closed otherwise.
             explorer: if has_file {
                 None
             } else {
@@ -322,6 +325,9 @@ impl App {
                     std::env::current_dir().unwrap_or_default(),
                 ))
             },
+            // Visible-by-default panels never steal the keyboard: the
+            // editor keeps focus until the user toggles the panel.
+            explorer_focused: false,
             overwrite: false,
             status: i18n::t(lang, Key::StartupHints).to_string(),
             lang,
@@ -1418,6 +1424,46 @@ impl App {
             self.on_prompt_key(key);
             return;
         }
+        // Explorer panel consumes keys only while focused; unfocused it is
+        // just visible and the editor keeps every binding (e.g. Ctrl+O).
+        if self.explorer.is_some() && self.explorer_focused {
+            let mut handled = true;
+            let mut open_path: Option<PathBuf> = None;
+            {
+                let state = self.explorer.as_mut().expect("explorer open");
+                match (key.code, ctrl, shift) {
+                    (KeyCode::Esc, _, _) => self.toggle_explorer(),
+                    (KeyCode::Enter, _, _) => {
+                        if let Some(row) = state.rows.get(state.selected).cloned() {
+                            if row.is_dir {
+                                state.toggle_selected();
+                            } else {
+                                open_path = Some(row.path.clone());
+                            }
+                        }
+                    }
+                    // Plain arrow keys only — don't steal Alt/Ctrl variants.
+                    (KeyCode::Up, false, false) => state.move_selection(-1),
+                    (KeyCode::Down, false, false) => state.move_selection(1),
+                    (KeyCode::Right, false, false) => state.toggle_selected(),
+                    (KeyCode::Left, false, false) => state.collapse_or_up(),
+                    // Everything else belongs to the editor even while the
+                    // panel has focus (typing, Ctrl+S, Ctrl+Q, ...).
+                    _ => handled = false,
+                }
+            }
+            if let Some(path) = open_path {
+                self.explorer = None;
+                self.explorer_focused = false;
+                self.handle_prompt_confirm(
+                    &PromptKind::OpenFile,
+                    &path.to_string_lossy().into_owned(),
+                );
+            }
+            if handled {
+                return;
+            }
+        }
         match (key.code, ctrl, shift) {
             // Ctrl+Shift+S → save all (must precede plain Ctrl+S)
             (KeyCode::Char('s' | 'S'), true, true) => self.save_all(),
@@ -1438,6 +1484,10 @@ impl App {
             // F4 → command palette (terminal-proof fallback; F2/F3/F5/F6/F8
             // precedent)
             (KeyCode::F(4), _, _) => self.open_palette(),
+            // F9 → toggle file explorer panel
+            (KeyCode::F(9), _, _) => self.toggle_explorer(),
+            // Ctrl+B → toggle file explorer panel
+            (KeyCode::Char('b' | 'B'), true, _) => self.toggle_explorer(),
             // Ctrl+P → quick-open fuzzy picker
             (KeyCode::Char('p' | 'P'), true, _) => self.open_quick_open(),
             // Ctrl+O → open file prompt
@@ -2183,6 +2233,29 @@ impl App {
         }
         if has_matches {
             self.goto_match(0);
+        }
+    }
+
+    /// Toggle the side file explorer panel (Ctrl+B / F9).
+    /// Closed → open + focused. Open + unfocused → focus it.
+    /// Open + focused → close (VS Code sidebar semantics).
+    pub fn toggle_explorer(&mut self) {
+        if self.explorer.is_some() {
+            if self.explorer_focused {
+                self.explorer = None;
+                self.explorer_focused = false;
+            } else {
+                self.explorer_focused = true;
+            }
+        } else {
+            let root = self
+                .doc()
+                .path()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            self.explorer = Some(explorer::ExplorerState::open_at(root));
+            self.explorer_focused = true;
         }
     }
 
@@ -4071,6 +4144,215 @@ mod tests {
         app.prompt = Some((PromptKind::SaveAs, "/some/path".to_string()));
         app.on_key(plain(KeyCode::Esc));
         assert!(app.prompt.is_none(), "Esc must cancel the prompt");
+    }
+
+    // -- Explorer panel keys (milestone 3 T3) ----------------------------
+
+    /// Tree fixture: root/with `sub/inner.txt`, `top.txt`, and an empty dir.
+    fn explorer_fixture(name: &str) -> PathBuf {
+        let dir = temp_dir(name);
+        std::fs::create_dir_all(dir.join("sub")).expect("create sub");
+        std::fs::create_dir_all(dir.join("emptydir")).expect("create emptydir");
+        std::fs::write(dir.join("top.txt"), "top").expect("write top");
+        std::fs::write(dir.join("sub/inner.txt"), "inner").expect("write inner");
+        dir
+    }
+
+    #[test]
+    fn ctrl_b_opens_and_focuses_explorer_when_closed() {
+        let dir = explorer_fixture("ctrlb_open");
+        let doc = dir.join("top.txt");
+        // A pathed doc starts the explorer closed (S1).
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        assert!(app.explorer.is_none());
+        app.on_key(ctrl(KeyCode::Char('b')));
+        assert!(app.explorer.is_some(), "Ctrl+B must open the panel");
+        assert!(app.explorer_focused, "Ctrl+B must focus the panel");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ctrl_b_closes_focused_explorer() {
+        let dir = explorer_fixture("ctrlb_close");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        app.on_key(ctrl(KeyCode::Char('b'))); // close
+        assert!(app.explorer.is_none(), "second Ctrl+B must close the panel");
+        assert!(!app.explorer_focused);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ctrl_b_focuses_visible_but_unfocused_explorer() {
+        // Untitled doc: the panel opens by default, unfocused (S1).
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        assert!(app.explorer.is_some());
+        assert!(!app.explorer_focused);
+        app.on_key(ctrl(KeyCode::Char('b')));
+        assert!(app.explorer.is_some(), "Ctrl+B must NOT close an unfocused panel");
+        assert!(app.explorer_focused, "Ctrl+B must focus the visible panel");
+    }
+
+    #[test]
+    fn visible_unfocused_explorer_keeps_editor_keys() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        assert!(app.explorer.is_some() && !app.explorer_focused);
+        // Plain movement must reach the editor, not the tree: build 3 lines,
+        // put the cursor on the last one, then Up moves the TEXT cursor.
+        typed(&mut app, "one");
+        app.on_key(plain(KeyCode::Enter));
+        typed(&mut app, "two");
+        app.on_key(plain(KeyCode::Enter));
+        typed(&mut app, "three");
+        assert_eq!(app.cursor_line, 2);
+        app.on_key(plain(KeyCode::Up));
+        assert_eq!(app.cursor_line, 1, "Up must move the editor cursor");
+        // Esc must clear a selection, not close the panel.
+        app.on_key(shift(KeyCode::Home)); // selection
+        assert!(app.normalized_selection().is_some());
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.normalized_selection().is_none(), "Esc must clear the selection");
+        assert!(app.explorer.is_some(), "unfocused Esc must not close the panel");
+    }
+
+    #[test]
+    fn focused_explorer_arrows_navigate_tree() {
+        let dir = explorer_fixture("arrows");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        let state = app.explorer.as_ref().expect("open");
+        // Depth-1 dirs auto-expand (INITIAL_DEPTH 3), so `sub` shows
+        // inner.txt: [emptydir, sub, inner.txt, top.txt].
+        assert_eq!(state.len(), 4, "rows: {:?}", state.rows.iter().map(|r| &r.name).collect::<Vec<_>>());
+        assert_eq!(state.selected, 0);
+        app.on_key(plain(KeyCode::Down));
+        let state = app.explorer.as_ref().expect("open");
+        assert_eq!(state.selected, 1, "Down must move the tree selection");
+        app.on_key(plain(KeyCode::Up));
+        let state = app.explorer.as_ref().expect("open");
+        assert_eq!(state.selected, 0, "Up must move the tree selection back");
+        // Ctrl+Down must NOT be stolen: it goes to the editor.
+        app.on_key(ctrl(KeyCode::Down));
+        let state = app.explorer.as_ref().expect("open");
+        assert_eq!(state.selected, 0, "Ctrl+Down must not move the tree selection");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn focused_explorer_right_expands_left_collapses() {
+        let dir = explorer_fixture("expand");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        // `sub` (index 1) starts EXPANDED (depth 1 < INITIAL_DEPTH 3).
+        app.on_key(plain(KeyCode::Down));
+        app.on_key(plain(KeyCode::Right)); // collapse sub
+        {
+            let state = app.explorer.as_ref().expect("open");
+            assert!(
+                !state.rows.iter().any(|r| r.name == "inner.txt"),
+                "Right must collapse the expanded sub"
+            );
+        }
+        app.on_key(plain(KeyCode::Right)); // expand sub again
+        {
+            let state = app.explorer.as_ref().expect("open");
+            assert!(
+                state.rows.iter().any(|r| r.name == "inner.txt"),
+                "Right must expand the collapsed sub"
+            );
+        }
+        // Left on a FILE collapses the nearest expanded ancestor (sub).
+        // Rows now: [emptydir, sub, inner.txt, top.txt]; selected = sub (1),
+        // so one Down lands on inner.txt (2).
+        app.on_key(plain(KeyCode::Down));
+        app.on_key(plain(KeyCode::Left));
+        {
+            let state = app.explorer.as_ref().expect("open");
+            assert!(
+                !state.rows.iter().any(|r| r.name == "inner.txt"),
+                "Left on a file must collapse the nearest ancestor (sub)"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn focused_explorer_enter_on_file_opens_tab_and_closes_panel() {
+        let dir = explorer_fixture("enter_file");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        // Rows: [emptydir, sub, inner.txt, top.txt] → top.txt at index 3.
+        app.on_key(plain(KeyCode::Down));
+        app.on_key(plain(KeyCode::Down));
+        app.on_key(plain(KeyCode::Down));
+        app.on_key(plain(KeyCode::Enter));
+        assert!(app.explorer.is_none(), "opening a file must close the panel");
+        assert_eq!(app.docs.len(), 2, "the file must open as a new tab");
+        assert_eq!(
+            app.docs.last().expect("new tab").line(0),
+            "top",
+            "content loaded"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn focused_explorer_enter_on_dir_toggles() {
+        let dir = explorer_fixture("enter_dir");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        // `sub` (index 1) starts expanded, so Enter first collapses it.
+        app.on_key(plain(KeyCode::Down));
+        app.on_key(plain(KeyCode::Enter));
+        {
+            let state = app.explorer.as_ref().expect("panel stays open");
+            assert!(
+                !state.rows.iter().any(|r| r.name == "inner.txt"),
+                "Enter on an expanded dir must collapse it"
+            );
+        }
+        app.on_key(plain(KeyCode::Enter)); // expand again
+        {
+            let state = app.explorer.as_ref().expect("panel stays open");
+            assert!(
+                state.rows.iter().any(|r| r.name == "inner.txt"),
+                "Enter on a collapsed dir must expand it"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn focused_explorer_esc_closes_panel() {
+        let dir = explorer_fixture("esc");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        app.on_key(plain(KeyCode::Esc));
+        assert!(app.explorer.is_none(), "Esc must close the focused panel");
+        assert!(!app.explorer_focused);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn focused_explorer_keeps_other_editor_bindings() {
+        let dir = explorer_fixture("otherkeys");
+        let doc = dir.join("top.txt");
+        let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
+        // Ctrl+O must still open the open-file prompt.
+        app.on_key(ctrl(KeyCode::Char('o')));
+        assert!(app.prompt.is_some(), "Ctrl+O must work while the panel is focused");
+        app.on_key(plain(KeyCode::Esc)); // close prompt
+        // F10 must still request quit.
+        app.on_key(plain(KeyCode::F(10)));
+        assert!(app.confirm.is_some(), "F10 must still ask to quit");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // -- Mouse tests ----------------------------------------------------
