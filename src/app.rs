@@ -1321,6 +1321,21 @@ impl App {
         self.cursor_col = view.col;
         self.scroll_top = view.scroll_top;
         self.col_off = view.col_off;
+        // S3: the tree follows the active document — re-root when the new
+        // tab has a path; keep the current root for untitled docs.
+        if self.explorer.is_some()
+            && let Some(path) = self.docs[index].path()
+        {
+            let dir = path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            if let Some(state) = self.explorer.as_mut()
+                && state.root() != dir
+            {
+                state.set_root(dir);
+            }
+        }
         self.clamp_cursor();
         self.clamp_scroll();
     }
@@ -4336,6 +4351,35 @@ mod tests {
         app.on_key(plain(KeyCode::Esc));
         assert!(app.explorer.is_none(), "Esc must close the focused panel");
         assert!(!app.explorer_focused);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn explorer_reroots_when_switching_to_pathed_doc() {
+        let dir = explorer_fixture("reroot_switch");
+        std::fs::create_dir_all(dir.join("other")).expect("create other");
+        std::fs::write(dir.join("other/other.txt"), "o").expect("write other");
+        let top = dir.join("top.txt");
+        let other = dir.join("other/other.txt");
+        let mut app = App::new(vec![Document::new_with_path(&top), Document::new_with_path(&other)], Lang::En);
+        app.on_key(ctrl(KeyCode::Char('b'))); // open + focus, root = dir
+        assert_eq!(
+            app.explorer.as_ref().expect("open").root(),
+            dir,
+            "initial root is the active doc's dir"
+        );
+        // Ctrl+PageDown switches to the `other` tab (index 1).
+        app.on_key(ctrl(KeyCode::PageDown));
+        let state = app.explorer.as_ref().expect("panel stays open");
+        assert_eq!(
+            state.root(),
+            dir.join("other"),
+            "root must follow the newly active pathed doc"
+        );
+        assert!(
+            state.rows.iter().any(|r| r.name == "other.txt"),
+            "tree must list the new root's entries"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

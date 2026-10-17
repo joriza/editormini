@@ -61,14 +61,19 @@ impl ExplorerState {
         &self.root
     }
 
+    /// Render-facing accessors for the panel draw (milestone 3 T4/T5);
+    /// unused until the renderer consumes them.
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.rows.len()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
     }
 
+    #[allow(dead_code)]
     pub fn row(&self, index: usize) -> Option<&ExplorerRow> {
         self.rows.get(index)
     }
@@ -91,6 +96,8 @@ impl ExplorerState {
         }
     }
 
+    /// Jump the selection to `index` (mouse row clicks in T6).
+    #[allow(dead_code)]
     pub fn select(&mut self, index: usize) {
         if !self.rows.is_empty() {
             self.selected = index.min(self.rows.len() - 1);
