@@ -89,8 +89,7 @@ impl ExplorerState {
             return;
         }
         if delta >= 0 {
-            self.selected = (self.selected + delta as usize)
-                .min(self.rows.len() - 1);
+            self.selected = (self.selected + delta as usize).min(self.rows.len() - 1);
         } else {
             self.selected = self.selected.saturating_sub(delta.unsigned_abs());
         }
@@ -104,11 +103,18 @@ impl ExplorerState {
         }
     }
 
-    /// Expand/collapse the selected directory. No-op on file rows.
+    /// Expand/collapse the selected directory. No-op on file rows and the
+    /// `..` sentinel (it only makes sense to Enter a directory as root).
     pub fn toggle_selected(&mut self) {
         let Some(row) = self.selected_row().cloned() else {
             return;
         };
+        // The `..` row is a navigation shortcut, not an actual directory in the
+        // tree: toggle / collapse is a no-op; the user must use Ctrl+Enter to
+        // go up one level.
+        if row.name == ".." {
+            return;
+        }
         if !row.is_dir || row.empty {
             return;
         }
@@ -118,6 +124,20 @@ impl ExplorerState {
             self.expanded.insert(row.path.clone());
         }
         self.rebuild(false);
+    }
+
+    /// Change the tree root to the parent of the current root. No-op at the
+    /// filesystem root (keeps the current root unchanged). The selection jumps
+    /// to the top of the new tree (row 0).
+    pub fn go_up(&mut self) {
+        let Some(parent) = self.root.parent() else {
+            return;
+        };
+        if parent == self.root.as_path() {
+            return;
+        }
+        self.set_root(parent.to_path_buf());
+        self.selected = 0;
     }
 
     /// `←` behavior: collapse the selected dir, or the nearest expanded
@@ -135,7 +155,8 @@ impl ExplorerState {
         let above = self
             .rows
             .iter()
-            .take(self.selected).rfind(|r| r.is_dir && r.depth < row.depth && r.expanded);
+            .take(self.selected)
+            .rfind(|r| r.is_dir && r.depth < row.depth && r.expanded);
         if let Some(parent) = above {
             self.expanded.remove(&parent.path);
             self.rebuild(false);
@@ -153,14 +174,46 @@ impl ExplorerState {
 
     fn rebuild(&mut self, initial: bool) {
         self.rows.clear();
+        // Prepend a "parent" row so the user can navigate up one level at any
+        // time. The real tree starts at depth 1; .. is rendered at depth 0.
+        // Skip the sentinel when the root itself doesn't exist (e.g., missing
+        // temp dir in tests): there's no valid parent to go to.
+        if self.root.is_dir() {
+            self.rows.push(ExplorerRow {
+                path: self.root.parent().unwrap_or(self.root.as_path()).to_path_buf(),
+                name: "..".to_string(),
+                is_dir: true,
+                depth: 0,
+                expanded: false,
+                empty: false,
+            });
+        }
         let root = self.root.clone();
         let mut rows: Vec<ExplorerRow> = Vec::new();
-        Self::walk(&root, 1, initial, &mut self.expanded, &mut self.empty, &mut rows);
-        self.rows = rows;
+        Self::walk(
+            &root,
+            1,
+            initial,
+            &mut self.expanded,
+            &mut self.empty,
+            &mut rows,
+        );
+        self.rows.extend(rows);
         if self.rows.is_empty() {
             self.selected = 0;
         } else {
             self.selected = self.selected.min(self.rows.len() - 1);
+        }
+        // When (re)building the full tree (initial or set_root), pre-populate
+        // the expanded set with directories at depth < INITIAL_DEPTH so they
+        // survive subsequent rebuilds (e.g. after user toggles another dir).
+        if initial {
+            self.expanded = self
+                .rows
+                .iter()
+                .filter(|r| r.is_dir && r.depth < INITIAL_DEPTH)
+                .map(|r| r.path.clone())
+                .collect();
         }
     }
 
@@ -178,13 +231,23 @@ impl ExplorerState {
         };
         let mut paths: Vec<PathBuf> = entries
             .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| {
+                // Hide dot-directories from the tree so the user can navigate
+                // project files without noise (.git, .github, node_modules, ...).
+                p.file_name()
+                    .map(|n| {
+                        let name = n.to_string_lossy();
+                        !name.starts_with('.') || !p.is_dir()
+                    })
+                    .unwrap_or(true)
+            })
             .collect();
         // Directories before files, alphabetical within each group.
         paths.sort_by(|a, b| {
             let (a_dir, b_dir) = (a.is_dir(), b.is_dir());
-            b_dir.cmp(&a_dir).then_with(|| {
-                a.file_name().as_ref().cmp(&b.file_name().as_ref())
-            })
+            b_dir
+                .cmp(&a_dir)
+                .then_with(|| a.file_name().as_ref().cmp(&b.file_name().as_ref()))
         });
         if paths.is_empty() {
             empty.insert(dir.to_path_buf());
@@ -204,10 +267,6 @@ impl ExplorerState {
             } else {
                 false
             };
-            // Track empty dirs (not files — files can't be "empty").
-            if !is_dir || expanded_flag {
-                // Don't mark as empty unless we know it has no children.
-            }
             rows.push(ExplorerRow {
                 path: path.clone(),
                 name,
@@ -277,14 +336,21 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "alpha", "beta", "charlie", "golf.txt", "foxtrot.txt",
-                "bravo", "golf.txt", "a.txt",
+                "..",
+                "alpha",
+                "beta",
+                "charlie",
+                "golf.txt",
+                "foxtrot.txt",
+                "bravo",
+                "golf.txt",
+                "a.txt",
             ],
             "unexpected rows: {names:?}"
         );
-        assert_eq!(state.rows[0].depth, 1);
-        // charlie is at index 2, depth 3, NOT expanded.
-        assert!(state.rows[2].is_dir && !state.rows[2].expanded);
+        assert_eq!(state.rows[0].depth, 0);
+        // charlie is at index 3, depth 3, NOT expanded.
+        assert!(state.rows[3].is_dir && !state.rows[3].expanded);
         cleanup(&dir);
     }
 
@@ -294,18 +360,18 @@ mod tests {
         let mut state = ExplorerState::open_at(dir.clone());
         // Verify 'beta' is visible initially.
         assert!(state.rows.iter().any(|r| r.name == "beta"));
-        // 'alpha' is at index 0. Collapse it.
-        state.select(0);
+        // 'alpha' is at index 1 (index 0 is the `..` sentinel). Collapse it.
+        state.select(1);
         state.toggle_selected();
         // After collapsing alpha, its children (beta, foxtrot.txt) must be hidden.
         let names_after_collapse: Vec<String> = state.rows.iter().map(|r| r.name.clone()).collect();
         assert_eq!(
             names_after_collapse,
-            vec!["alpha", "bravo", "golf.txt", "a.txt"],
+            vec!["..", "alpha", "bravo", "golf.txt", "a.txt"],
             "collapsed alpha leaves only top-level items + expanded siblings: {names_after_collapse:?}"
         );
         // Expand again.
-        state.select(0);
+        state.select(1); // alpha
         state.toggle_selected();
         assert!(
             state.rows.iter().any(|r| r.name == "beta"),
@@ -325,7 +391,10 @@ mod tests {
             .position(|r| r.name == "charlie")
             .expect("charlie must be visible at depth 3");
         // 'delta' must NOT be visible initially.
-        assert!(!state.rows.iter().any(|r| r.name == "delta"), "delta hidden initially");
+        assert!(
+            !state.rows.iter().any(|r| r.name == "delta"),
+            "delta hidden initially"
+        );
         // Expand charlie.
         state.select(charlie_idx);
         state.toggle_selected();
@@ -357,11 +426,18 @@ mod tests {
                 .iter()
                 .any(|r| r.name == "golf.txt" && r.depth == 3),
             "golf.txt at depth 3 must be hidden when beta collapses: {:?}",
-            state.rows.iter().map(|r| format!("{}(d{})", r.name, r.depth)).collect::<Vec<_>>()
+            state
+                .rows
+                .iter()
+                .map(|r| format!("{}(d{})", r.name, r.depth))
+                .collect::<Vec<_>>()
         );
         // bravo/golf.txt at depth 2 should still be visible.
         assert!(
-            state.rows.iter().any(|r| r.name == "golf.txt" && r.depth == 2),
+            state
+                .rows
+                .iter()
+                .any(|r| r.name == "golf.txt" && r.depth == 2),
             "bravo/golf.txt at depth 2 should still be visible"
         );
         cleanup(&dir);
@@ -386,7 +462,10 @@ mod tests {
         state.select(state.len() - 1); // last row
         state.select(0); // alpha
         state.toggle_selected(); // collapse alpha
-        assert!(state.selected < state.len(), "selection clamped after collapse");
+        assert!(
+            state.selected < state.len(),
+            "selection clamped after collapse"
+        );
         state.move_selection(999);
         assert_eq!(state.selected, state.len() - 1);
         state.move_selection(-999);
@@ -410,6 +489,78 @@ mod tests {
             "reroot must show a.txt"
         );
         assert_eq!(state.selected, 0);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn go_up_changes_root_to_parent() {
+        let dir = fixture("levels");
+        // Start inside alpha.
+        let mut state = ExplorerState::open_at(dir.join("alpha").clone());
+        assert_eq!(state.root(), dir.join("alpha"));
+        assert!(
+            state.rows.iter().any(|r| r.name == "foxtrot.txt"),
+            "alpha root must show foxtrot.txt"
+        );
+        // Navigate up one level.
+        state.go_up();
+        assert_eq!(state.root(), &dir);
+        // The top-level items must now be visible (alpha, bravo, a.txt).
+        assert!(
+            state.rows.iter().any(|r| r.name == "alpha"),
+            "after go_up, alpha must be visible at root level"
+        );
+        assert!(
+            state.rows.iter().any(|r| r.name == "bravo"),
+            "after go_up, bravo must be visible at root level"
+        );
+        // The sentinel row is always at index 0.
+        assert_eq!(state.rows[0].name, "..");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn dot_directories_are_hidden() {
+        let dir = std::env::temp_dir().join(format!(
+            "editormini_explorer_dots_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join(".github")).unwrap();
+        std::fs::write(dir.join("visible.txt"), "x").unwrap();
+        std::fs::write(dir.join(".hidden_file"), "x").unwrap();
+        let state = ExplorerState::open_at(dir.clone());
+        let names: Vec<&str> = state
+            .rows
+            .iter()
+            .filter(|r| r.name != "..")
+            .map(|r| r.name.as_str())
+            .collect();
+        assert!(
+            !names.iter().any(|&n| n == ".git"),
+            "dot-directories must be hidden: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|&n| n == ".github"),
+            "dot-directories must be hidden: {names:?}"
+        );
+        assert!(names.contains(&"visible.txt"), "regular files must show: {names:?}");
+        // Dot-files are NOT directories, so they should still appear.
+        assert!(names.contains(&".hidden_file"), "dot-files must show: {names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parent_sentinel_is_always_first_row() {
+        let dir = fixture("levels");
+        let state = ExplorerState::open_at(dir.clone());
+        assert_eq!(state.rows[0].name, "..");
+        assert_eq!(state.rows[0].depth, 0);
+        assert!(!state.rows[0].expanded);
+        // The real tree starts at index 1.
+        assert_eq!(state.rows[1].name, "alpha");
+        assert_eq!(state.rows[1].depth, 1);
         cleanup(&dir);
     }
 }

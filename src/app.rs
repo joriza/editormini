@@ -1450,7 +1450,9 @@ impl App {
                     (KeyCode::Esc, _, _) => self.toggle_explorer(),
                     (KeyCode::Enter, _, _) => {
                         if let Some(row) = state.rows.get(state.selected).cloned() {
-                            if row.is_dir {
+                            if row.name == ".." {
+                                state.go_up();
+                            } else if row.is_dir {
                                 state.toggle_selected();
                             } else {
                                 open_path = Some(row.path.clone());
@@ -1470,10 +1472,7 @@ impl App {
             if let Some(path) = open_path {
                 self.explorer = None;
                 self.explorer_focused = false;
-                self.handle_prompt_confirm(
-                    &PromptKind::OpenFile,
-                    &path.to_string_lossy(),
-                );
+                self.handle_prompt_confirm(&PromptKind::OpenFile, &path.to_string_lossy());
             }
             if handled {
                 return;
@@ -2777,14 +2776,10 @@ impl App {
         let (explorer_area, editor_area) = if self.explorer.is_some() {
             // Max first, then min: a narrow terminal gets the full width
             // instead of a clamp(min > max) panic.
-            let panel_w = (main_area.width * 2 / 5)
-                .max(24)
-                .min(main_area.width);
-            let [panel, editor] = Layout::horizontal([
-                Constraint::Length(panel_w),
-                Constraint::Min(1),
-            ])
-            .areas(main_area);
+            let panel_w = (main_area.width * 2 / 5).max(24).min(main_area.width);
+            let [panel, editor] =
+                Layout::horizontal([Constraint::Length(panel_w), Constraint::Min(1)])
+                    .areas(main_area);
             (Some(panel), editor)
         } else {
             (None, main_area)
@@ -2829,7 +2824,7 @@ impl App {
             .skip(skip)
             .take(inner_h)
             .map(|(i, row)| {
-                let indent = "  ".repeat(row.depth - 1);
+                let indent = "  ".repeat(row.depth.saturating_sub(1));
                 let (marker, name) = if row.is_dir {
                     (
                         if row.expanded { "▼ " } else { "▶ " },
@@ -2859,15 +2854,14 @@ impl App {
             .border_style(Style::new().fg(theme.accent))
             .title(Span::styled(
                 // T5: localized title + the tree root, so the panel always
-                // names the directory it is browsing.
+                // names the directory it is browsing. Uses theme.fg for high
+                // readability on dark backgrounds.
                 format!(
-                    "{} \u{2014} {}",
+                    " {} \u{2014} {} ",
                     i18n::t(self.lang, Key::ExplorerTitle),
                     state.root().display()
                 ),
-                Style::new()
-                    .fg(theme.line_number_fg)
-                    .add_modifier(Modifier::DIM),
+                Style::new().fg(theme.fg).add_modifier(Modifier::BOLD),
             ));
         f.render_widget(
             Paragraph::new(lines)
@@ -4300,7 +4294,10 @@ mod tests {
         assert!(app.explorer.is_some());
         assert!(!app.explorer_focused);
         app.on_key(ctrl(KeyCode::Char('b')));
-        assert!(app.explorer.is_some(), "Ctrl+B must NOT close an unfocused panel");
+        assert!(
+            app.explorer.is_some(),
+            "Ctrl+B must NOT close an unfocused panel"
+        );
         assert!(app.explorer_focused, "Ctrl+B must focus the visible panel");
     }
 
@@ -4322,8 +4319,14 @@ mod tests {
         app.on_key(shift(KeyCode::Home)); // selection
         assert!(app.normalized_selection().is_some());
         app.on_key(plain(KeyCode::Esc));
-        assert!(app.normalized_selection().is_none(), "Esc must clear the selection");
-        assert!(app.explorer.is_some(), "unfocused Esc must not close the panel");
+        assert!(
+            app.normalized_selection().is_none(),
+            "Esc must clear the selection"
+        );
+        assert!(
+            app.explorer.is_some(),
+            "unfocused Esc must not close the panel"
+        );
     }
 
     #[test]
@@ -4334,8 +4337,13 @@ mod tests {
         app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
         let state = app.explorer.as_ref().expect("open");
         // Depth-1 dirs auto-expand (INITIAL_DEPTH 3), so `sub` shows
-        // inner.txt: [emptydir, sub, inner.txt, top.txt].
-        assert_eq!(state.len(), 4, "rows: {:?}", state.rows.iter().map(|r| &r.name).collect::<Vec<_>>());
+        // inner.txt: [.., emptydir, sub, inner.txt, top.txt].
+        assert_eq!(
+            state.len(),
+            5,
+            "rows: {:?}",
+            state.rows.iter().map(|r| &r.name).collect::<Vec<_>>()
+        );
         assert_eq!(state.selected, 0);
         app.on_key(plain(KeyCode::Down));
         let state = app.explorer.as_ref().expect("open");
@@ -4346,7 +4354,10 @@ mod tests {
         // Ctrl+Down must NOT be stolen: it goes to the editor.
         app.on_key(ctrl(KeyCode::Down));
         let state = app.explorer.as_ref().expect("open");
-        assert_eq!(state.selected, 0, "Ctrl+Down must not move the tree selection");
+        assert_eq!(
+            state.selected, 0,
+            "Ctrl+Down must not move the tree selection"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4356,7 +4367,8 @@ mod tests {
         let doc = dir.join("top.txt");
         let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
         app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
-        // `sub` (index 1) starts EXPANDED (depth 1 < INITIAL_DEPTH 3).
+        // `sub` (index 2) starts EXPANDED (depth 1 < INITIAL_DEPTH 3).
+        app.on_key(plain(KeyCode::Down));
         app.on_key(plain(KeyCode::Down));
         app.on_key(plain(KeyCode::Right)); // collapse sub
         {
@@ -4375,8 +4387,8 @@ mod tests {
             );
         }
         // Left on a FILE collapses the nearest expanded ancestor (sub).
-        // Rows now: [emptydir, sub, inner.txt, top.txt]; selected = sub (1),
-        // so one Down lands on inner.txt (2).
+        // Rows now: [.., emptydir, sub, inner.txt, top.txt]; selected = sub (2),
+        // so one Down lands on inner.txt (3).
         app.on_key(plain(KeyCode::Down));
         app.on_key(plain(KeyCode::Left));
         {
@@ -4395,12 +4407,16 @@ mod tests {
         let doc = dir.join("top.txt");
         let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
         app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
-        // Rows: [emptydir, sub, inner.txt, top.txt] → top.txt at index 3.
+        // Rows: [.., emptydir, sub, inner.txt, top.txt] → top.txt at index 4.
+        app.on_key(plain(KeyCode::Down));
         app.on_key(plain(KeyCode::Down));
         app.on_key(plain(KeyCode::Down));
         app.on_key(plain(KeyCode::Down));
         app.on_key(plain(KeyCode::Enter));
-        assert!(app.explorer.is_none(), "opening a file must close the panel");
+        assert!(
+            app.explorer.is_none(),
+            "opening a file must close the panel"
+        );
         assert_eq!(app.docs.len(), 2, "the file must open as a new tab");
         assert_eq!(
             app.docs.last().expect("new tab").line(0),
@@ -4416,7 +4432,8 @@ mod tests {
         let doc = dir.join("top.txt");
         let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
         app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
-        // `sub` (index 1) starts expanded, so Enter first collapses it.
+        // `sub` (index 2) starts expanded, so Enter first collapses it.
+        app.on_key(plain(KeyCode::Down));
         app.on_key(plain(KeyCode::Down));
         app.on_key(plain(KeyCode::Enter));
         {
@@ -4456,7 +4473,13 @@ mod tests {
         std::fs::write(dir.join("other/other.txt"), "o").expect("write other");
         let top = dir.join("top.txt");
         let other = dir.join("other/other.txt");
-        let mut app = App::new(vec![Document::new_with_path(&top), Document::new_with_path(&other)], Lang::En);
+        let mut app = App::new(
+            vec![
+                Document::new_with_path(&top),
+                Document::new_with_path(&other),
+            ],
+            Lang::En,
+        );
         app.on_key(ctrl(KeyCode::Char('b'))); // open + focus, root = dir
         assert_eq!(
             app.explorer.as_ref().expect("open").root(),
@@ -4486,7 +4509,10 @@ mod tests {
         app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
         // Ctrl+O must still open the open-file prompt.
         app.on_key(ctrl(KeyCode::Char('o')));
-        assert!(app.prompt.is_some(), "Ctrl+O must work while the panel is focused");
+        assert!(
+            app.prompt.is_some(),
+            "Ctrl+O must work while the panel is focused"
+        );
         app.on_key(plain(KeyCode::Esc)); // close prompt
         // F10 must still request quit.
         app.on_key(plain(KeyCode::F(10)));
@@ -4507,14 +4533,20 @@ mod tests {
         // Panel spans 80*2/5 = 32 cols: border corners at x=0/x=31.
         assert_eq!(buf[(0, 1)].symbol(), "┌", "panel top-left border");
         assert_eq!(buf[(31, 1)].symbol(), "┐", "panel top-right border");
-        // First tree row (screen row 2) shows the first entry, emptydir/,
-        // with the expanded marker (depth-1 dirs auto-expand).
+        // First tree row (screen row 2) shows the `..` sentinel, rendered at
+        // depth 0 (no indent) with the dir marker.
         let row_text: String = (1..31).map(|x| buf[(x, 2)].symbol()).collect();
         assert!(
-            row_text.contains("emptydir/"),
-            "dirs get a / suffix: {row_text:?}"
+            row_text.contains(".."),
+            "parent sentinel renders: {row_text:?}"
         );
-        assert!(row_text.contains('▼'), "expanded dir marker: {row_text:?}");
+        // Second tree row (screen row 3) should be the first depth-1 dir
+        // (emptydir/ in this fixture), which auto-expands (depth 1 < 3).
+        let row_text_next: String = (1..31).map(|x| buf[(x, 3)].symbol()).collect();
+        assert!(
+            row_text_next.contains("▼"),
+            "expanded dir marker on first real entry: {row_text_next:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4574,8 +4606,9 @@ mod tests {
         let doc = dir.join("f00.txt");
         let mut app = App::new(vec![Document::new_with_path(&doc)], Lang::En);
         app.on_key(ctrl(KeyCode::Char('b'))); // open + focus
-        // 10-row terminal: 8 inner panel rows. Move to the last of 12 rows.
-        for _ in 0..11 {
+        // 10-row terminal: 8 inner panel rows. Move to the last of 13 rows
+        // (.. sentinel + 12 files). Nine more Down beyond the initial 0.
+        for _ in 0..12 {
             app.on_key(plain(KeyCode::Down));
         }
         let mut terminal =
@@ -4583,14 +4616,13 @@ mod tests {
         terminal.draw(|f| app.draw(f)).unwrap();
         let buf = terminal.backend().buffer();
         let visible: String = (2..8)
-            .map(|y| {
-                (1..31)
-                    .map(|x| buf[(x, y)].symbol())
-                    .collect::<String>()
-            })
+            .map(|y| (1..31).map(|x| buf[(x, y)].symbol()).collect::<String>())
             .collect();
         assert!(visible.contains("f11.txt"), "last row visible: {visible:?}");
-        assert!(!visible.contains("f00.txt"), "top scrolled away: {visible:?}");
+        assert!(
+            !visible.contains("f00.txt"),
+            "top scrolled away: {visible:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
