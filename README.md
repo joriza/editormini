@@ -28,7 +28,10 @@ cargo build --release
 editormini                          # documento nuevo sin título
 editormini nota.md main.rs          # varios archivos = varias pestañas
 editormini --lang es codigo.rs      # fuerza la interfaz al español
+editormini examples/                # abre todos los samples de sintaxis
 ```
+
+> La carpeta `examples/` contiene archivos de muestra en varios lenguajes (.rs, .cs, .py, .js, .md, .json, .yaml) para probar el resaltado de sintaxis por extensión.
 
 > Consejo: ejecutarlo dentro de **Windows Terminal** o el terminal de VS Code.
 > En Git Bash/mintty, el control de flujo del terminal se come `Ctrl+S` (por eso también existe `F2`).
@@ -41,7 +44,7 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 | Escribir, Enter, Backspace, Delete | editar texto (con selección activa, Backspace/Delete borran lo seleccionado) |
 | `Insert` | alternar modo sobrescribir (indicador `OVR`) |
 | `Ctrl+S` o `F2` | guardar (en pestaña sin título abre Guardar como) |
-| `Ctrl+Q` | salir (pregunta si hay cambios sin guardar: Y/N/C — acepta S en español) |
+| `Ctrl+Q` o `F10` | salir (pregunta si hay cambios sin guardar: Y/N/C — acepta S en español) |
 | `Ctrl+W` | cerrar pestaña (pregunta si hay cambios) |
 | `Ctrl+PgDn` / `Ctrl+PgUp` | pestaña siguiente / anterior (cicla) |
 | `Ctrl+1` | ir al último documento del panel 1 (`Ctrl+2` reservada para el panel 2) |
@@ -81,6 +84,21 @@ editormini --lang es codigo.rs      # fuerza la interfaz al español
 {
   "language": "en",
   "theme": "dark-plus",
+  "export": {},
+  "open_files": ["/path/to/last.txt", "/path/to/other.md"]
+}
+```
+
+### Sesiones
+
+Al cerrar el editor, las rutas de las pestañas abiertas (solo las que tienen archivo; las pestañas sin título se omiten) se guardan en `open_files`. Al siguiente arranque, **sin pasos archivos por línea de comandos**, el editor las reabre tal cual. Archivos que hayan sido eliminados entre tanto se saltean sin bloquear el arranque; si no queda ninguna pestaña válida, abre una sin título como siempre.
+
+Los paths de la CLI siguen ganando: `editormini a.txt b.txt` abre esos archivos y ignora la sessión guardada.
+
+```json
+{
+  "language": "en",
+  "theme": "dark-plus",
   "export": {
     "markdown_pdf_command": null,
     "markdown_pdf_css": null,
@@ -107,6 +125,7 @@ src/
   config.rs    configuración JSON junto al ejecutable
   build.rs     sello de compilación UTC (MMDD-HHMM) que muestra la barra de estado
 docs/          plan del proyecto, especificaciones, avances, hallazgos y métricas
+examples/      samples de código por lenguaje para probar resaltado de sintaxis
 odd/           tareas del flujo de trabajo (ODD)
 ```
 

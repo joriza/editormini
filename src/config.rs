@@ -52,6 +52,12 @@ pub struct Config {
     /// Reserved export section (inert in milestone 1).
     #[serde(default)]
     pub export: ExportConfig,
+    /// Files restored on next launch when no path is passed on the command
+    /// line. Written back on quit with the paths of every open document
+    /// (untitled tabs have no path and are skipped). Empty by default so a
+    /// fresh install ships no `open_files` key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_files: Vec<PathBuf>,
 }
 
 /// Where the config file is expected: beside the executable.
@@ -110,5 +116,20 @@ mod tests {
         // next to the test binary, so defaults must come back cleanly.
         let cfg = load().expect("load falls back to defaults");
         assert_eq!(cfg, Config::default());
+    }
+
+    #[test]
+    fn open_files_round_trips_and_is_omitted_when_empty() {
+        let mut cfg = Config::default();
+        assert_eq!(cfg.open_files, Vec::<PathBuf>::new());
+        // Empty list is not serialized — a fresh install ships no key.
+        let empty_json = serde_json::to_string(&Config::default()).expect("serialize");
+        assert!(!empty_json.contains("open_files"));
+        cfg.open_files.push(PathBuf::from("/tmp/a.txt"));
+        cfg.open_files.push(PathBuf::from("/tmp/b.txt"));
+        let json = serde_json::to_string(&cfg).expect("serialize");
+        let parsed: Config = serde_json::from_str(&json).expect("parse");
+        assert_eq!(parsed.open_files, cfg.open_files);
+        assert!(json.contains("open_files"));
     }
 }

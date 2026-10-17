@@ -215,7 +215,9 @@ impl Selection {
 pub const UNDO_LIMIT: usize = 100;
 
 /// Rows the interactive Ctrl+O list shows at once; the PageUp/PageDown step.
-const OPEN_LIST_PAGE: usize = 5;
+/// Visible rows in the Ctrl+O folder browser popup. Larger than a single
+/// screen page so deep directories scroll naturally instead of clipping.
+const OPEN_LIST_PAGE: usize = 15;
 
 /// Bounded per-tab edit history. One undo step is a `Vec<EditRecord>` because
 /// one logical edit (an overwrite keystroke, a multi-line paste) can apply
@@ -1415,6 +1417,8 @@ impl App {
             (KeyCode::F(2), _, _) => self.save_active(),
             // F3 → save all (fallback for Ctrl+Shift+S on Windows)
             (KeyCode::F(3), _, _) => self.save_all(),
+            // F10 → quit (terminal-proof fallback for Ctrl+Q)
+            (KeyCode::F(10), _, _) => self.request_quit(),
             // F8 → delete the current line (fallback for Ctrl+Shift+K when
             // the terminal/PTY strips the modifiers)
             (KeyCode::F(8), _, _) => self.delete_line(),
@@ -1573,8 +1577,9 @@ impl App {
             return;
         };
         match (kind, code) {
-            // [Y]es / [S]í — both keys accepted in both languages.
-            (ConfirmKind::Quit, KeyCode::Char('y' | 'Y' | 's' | 'S')) => {
+            // Quit confirmation accepts F10 as an additional close shortcut.
+            (ConfirmKind::Quit, KeyCode::F(10))
+            | (ConfirmKind::Quit, KeyCode::Char('y' | 'Y' | 's' | 'S')) => {
                 // Save every modified document with a path; a failure keeps
                 // the editor open and shows the error instead of losing work.
                 let mut failure: Option<String> = None;
@@ -2713,8 +2718,10 @@ impl App {
             })
             .collect();
         // Fit the width to the longest visible name (marker + padding +
-        // borders), never narrower than 24 nor wider than the editor.
-        let skip = (selected + 1).saturating_sub(visible);
+        // borders), never narrower than 48 nor wider than the editor.
+        // Scroll so the SELECTED row stays inside the window: at most one
+        // row above it moves off-screen per Down press.
+        let skip = selected.saturating_sub(visible.saturating_sub(1));
         let longest = display
             .iter()
             .skip(skip)
@@ -2722,11 +2729,15 @@ impl App {
             .map(|name| name.chars().count())
             .max()
             .unwrap_or(0);
-        let width = (longest as u16 + 8).max(24).min(editor_area.width);
-        let height = (visible as u16 + 2).min(editor_area.height);
-        let y = editor_area.y + editor_area.height.saturating_sub(height);
+        // A centered, roomy modal: 2x wider floor (48 cols) and 3x taller
+        // floor (11 rows, vs the old 5-row page), so even short lists render
+        // as a real centered dialog instead of a cramped bottom strip.
+        let width = (longest as u16 + 8).max(48).min(editor_area.width);
+        let height = (visible as u16 + 2).max(11).min(editor_area.height);
+        let x = editor_area.x + editor_area.width.saturating_sub(width) / 2;
+        let y = editor_area.y + editor_area.height.saturating_sub(height) / 2;
         let area = ratatui::prelude::Rect {
-            x: editor_area.x,
+            x,
             y,
             width,
             height,
@@ -2798,7 +2809,7 @@ impl App {
             })
             .collect();
         let visible = entries.len().clamp(1, 7);
-        let skip = (selected + 1).saturating_sub(visible);
+        let skip = selected.saturating_sub(visible.saturating_sub(1));
         let longest = entries
             .iter()
             .skip(skip)
@@ -3465,6 +3476,19 @@ mod tests {
         assert_eq!(app.confirm, None);
         assert!(!app.quit);
         assert_eq!(app.doc().line(0), "keep me");
+    }
+
+    #[test]
+    fn ctrl_q_f10_accepts_quit_confirmation() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "keep me");
+        app.on_key(ctrl(KeyCode::Char('q')));
+        assert_eq!(app.confirm, Some(ConfirmKind::Quit));
+        // F10 is the terminal-proof fallback for Ctrl+Q — it accepts the
+        // confirmation the same way Y/Sí does (the confirm state is cleared
+        // by the caller, not here).
+        app.on_key(plain(KeyCode::F(10)));
+        assert!(app.quit);
     }
 
     #[test]
@@ -6167,29 +6191,29 @@ three",
         terminal.draw(|f| app.draw(f)).unwrap();
         app.on_key(ctrl(KeyCode::Char('o')));
         terminal.draw(|f| app.draw(f)).unwrap();
-        // 3 candidates (".." + 2 files) -> bordered popup, height 5
-        // (3 entries + borders), anchored at the editor bottom: frame rows
-        // 4-8, width 24 (min). Row 4: top border with the hint title;
-        // row 5: selected entry (".."); row 6: only.txt; row 7: seed.txt;
-        // row 8: bottom border.
+        // 3 candidates (".." + 2 files) -> bordered popup, height 7
+        // (3 entries + borders + min height), centered: width 48, x=16 on
+        // 80 cols, y=1 on a 10-row terminal (editor area y=1). Row 1: top
+        // border with hint; row 2: "> .."; row 3: only.txt; row 4: seed.txt;
+        // row 7: bottom border.
         let mut top = String::new();
         let mut up_row = String::new();
         let mut sel_row = String::new();
         let mut second = String::new();
-        for col in 0..26u16 {
-            top.push_str(terminal.backend().buffer().get(col, 4).symbol());
-            up_row.push_str(terminal.backend().buffer().get(col, 5).symbol());
-            sel_row.push_str(terminal.backend().buffer().get(col, 6).symbol());
-            second.push_str(terminal.backend().buffer().get(col, 7).symbol());
+        for col in 0..64u16 {
+            top.push_str(terminal.backend().buffer().get(col, 1).symbol());
+            up_row.push_str(terminal.backend().buffer().get(col, 2).symbol());
+            sel_row.push_str(terminal.backend().buffer().get(col, 3).symbol());
+            second.push_str(terminal.backend().buffer().get(col, 4).symbol());
         }
         assert!(top.contains('┌'), "top border: {top}");
         assert!(top.contains("Home"), "hint title with nav keys: {top}");
-        assert!(up_row.contains("> .."), "row 5: {up_row}");
-        assert!(sel_row.contains("only.txt"), "row 6: {sel_row}");
-        assert!(second.contains("seed.txt"), "row 7: {second}");
-        // The right border closes the fitted width at col 23.
-        assert_eq!(terminal.backend().buffer().get(23, 6).symbol(), "│");
-        let cell = terminal.backend().buffer().get(1, 5);
+        assert!(up_row.contains("> .."), "row 2: {up_row}");
+        assert!(sel_row.contains("only.txt"), "row 3: {sel_row}");
+        assert!(second.contains("seed.txt"), "row 4: {second}");
+        // The right border closes the fitted width at col 63 (16 + 48 - 1).
+        assert_eq!(terminal.backend().buffer().get(63, 3).symbol(), "│");
+        let cell = terminal.backend().buffer().get(17, 2);
         assert_eq!(cell.style().bg, Some(Color::Rgb(0xE2, 0xC0, 0x89)));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -6720,7 +6744,10 @@ gamma",
         app.on_key(plain(KeyCode::Home));
         assert_eq!(app.open_selected, 0, "Home jumps to the first row");
         app.on_key(plain(KeyCode::PageDown));
-        assert_eq!(app.open_selected, 5, "PgDn moves one visible page (5)");
+        assert_eq!(
+            app.open_selected, 7,
+            "PgDn moves one visible page (clamped at end)"
+        );
         app.on_key(plain(KeyCode::PageUp));
         assert_eq!(app.open_selected, 0);
         app.on_key(plain(KeyCode::PageUp));
