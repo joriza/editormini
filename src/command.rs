@@ -29,6 +29,7 @@ pub enum CommandKind {
     NextTab,
     PrevTab,
     LastDocPanel1,
+    NewFile,
 }
 
 /// A palette entry: what runs and how it is labelled.
@@ -119,6 +120,10 @@ pub fn all_commands() -> Vec<Command> {
         Command {
             kind: LastDocPanel1,
             label_key: Key::CmdLastDocPanel1,
+        },
+        Command {
+            kind: NewFile,
+            label_key: Key::CmdNewFile,
         },
     ]
 }

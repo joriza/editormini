@@ -124,6 +124,8 @@ pub enum Key {
     SkippedReadOnly,
     /// Clipboard operation failed.
     ClipboardError,
+    /// Status: clipboard history ring size notification.
+    ClipboardHistoryCount,
     /// Hint line for the interactive open-file list.
     OpenListHints,
     /// Go-to-line prompt title (Ctrl+G).
@@ -166,6 +168,8 @@ pub enum Key {
     CmdPrevTab,
     /// Palette: View: Last Document of Panel 1.
     CmdLastDocPanel1,
+    /// Palette: File: New File (Ctrl+N).
+    CmdNewFile,
     /// Command palette hint line (popup title).
     PaletteHints,
     /// Quick-open picker hint line (popup title).
@@ -298,6 +302,8 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         // Clipboard operation failure.
         (Lang::En, Key::ClipboardError) => "Clipboard error",
         (Lang::Es, Key::ClipboardError) => "Error de portapapeles",
+        (Lang::En, Key::ClipboardHistoryCount) => "{n} items in history",
+        (Lang::Es, Key::ClipboardHistoryCount) => "{n} ítems en historial",
         // Interactive open-file list hint (title of the bordered popup).
         (Lang::En, Key::OpenListHints) => {
             "\u{2191}\u{2193}/Home/End/PgUp/PgDn pick \u{b7} Enter open, dir/ in \u{b7} ../up \u{b7} Esc exit \u{b7} type filters"
@@ -349,6 +355,8 @@ pub fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Es, Key::CmdPrevTab) => "Ver: Pestaña anterior (Ctrl+PgUp)",
         (Lang::En, Key::CmdLastDocPanel1) => "View: Last Document of Panel 1 (Ctrl+1)",
         (Lang::Es, Key::CmdLastDocPanel1) => "Ver: Último documento del panel 1 (Ctrl+1)",
+        (Lang::En, Key::CmdNewFile) => "File: New File (Ctrl+N)",
+        (Lang::Es, Key::CmdNewFile) => "Archivo: Nuevo archivo (Ctrl+N)",
         // Command palette popup hint (title of the bordered popup).
         (Lang::En, Key::PaletteHints) => {
             "\u{2191}\u{2193} pick \u{b7} Enter run \u{b7} Esc exit \u{b7} type to filter"
@@ -434,6 +442,7 @@ mod tests {
         Key::MatchCounterCross,
         Key::SkippedReadOnly,
         Key::ClipboardError,
+        Key::ClipboardHistoryCount,
         Key::OpenListHints,
         Key::GotoLine,
         Key::CmdSave,
@@ -455,6 +464,7 @@ mod tests {
         Key::CmdNextTab,
         Key::CmdPrevTab,
         Key::CmdLastDocPanel1,
+        Key::CmdNewFile,
         Key::PaletteHints,
         Key::QuickOpenHints,
     ];

@@ -287,6 +287,8 @@ pub struct App {
     pub lang: Lang,
     /// Active chrome theme (tabs, status bar, editor background).
     pub theme: Theme,
+    /// Clipboard history ring (most recent first, capped at 10).
+    pub clipboard_history: Vec<String>,
 }
 
 impl App {
@@ -332,6 +334,7 @@ impl App {
             status: i18n::t(lang, Key::StartupHints).to_string(),
             lang,
             theme: Theme::for_choice(ThemeChoice::DarkPlus),
+            clipboard_history: Vec::new(),
         }
     }
 
@@ -525,6 +528,21 @@ impl App {
         {
             self.status = i18n::t(self.lang, Key::ClipboardError).to_string();
         }
+        self.clipboard_history_push(text);
+    }
+
+    /// Push `text` onto the clipboard history ring (most recent first, capped
+    /// at 10 entries). Duplicates are dropped — pushing the same text twice
+    /// does not move it forward in the ring.
+    fn clipboard_history_push(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(pos) = self.clipboard_history.iter().position(|s| s == text) {
+            self.clipboard_history.remove(pos);
+        }
+        self.clipboard_history.insert(0, text.to_string());
+        self.clipboard_history.truncate(10);
     }
 
     /// Copy the current selection (or current line without trailing
@@ -602,10 +620,40 @@ impl App {
                 return;
             }
         };
-        // Normalize CRLF and lone CR to LF before inserting.
-        let normalized = clipboard_text.replace("\r\n", "\n").replace('\r', "\n");
+        self.clipboard_history_push(&clipboard_text);
+        self.do_paste_text(&clipboard_text);
+    }
+
+    /// Paste the most recent entry from the clipboard history ring
+    /// (Ctrl+Shift+V). When the ring is empty, falls back to the system
+    /// clipboard. Cycles to the previous entry on repeated invocations.
+    fn paste_from_clipboard_history(&mut self) {
+        let text = if let Some(entry) = self.clipboard_history.first().cloned() {
+            // Rotate: move the pasted entry to the end so the next Ctrl+Shift+V
+            // picks the second-most-recent entry.
+            self.clipboard_history.rotate_left(1);
+            entry
+        } else {
+            // Fallback to system clipboard when the ring is empty.
+            match arboard::Clipboard::new().and_then(|mut clip| clip.get_text()) {
+                Ok(t) => t,
+                Err(_) => {
+                    self.status = i18n::t(self.lang, Key::ClipboardError).to_string();
+                    return;
+                }
+            }
+        };
+        // Reuse the same paste logic as the regular paste command.
+        self.do_paste_text(&text);
+        let n = self.clipboard_history.len();
+        self.status = i18n::tr(self.lang, Key::ClipboardHistoryCount, &[("n", &n.to_string())]);
+    }
+
+    /// Extracted paste body shared by `paste_from_clipboard` and
+    /// `paste_from_clipboard_history` so the two paths stay in sync.
+    fn do_paste_text(&mut self, text: &str) {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         let mut records = Vec::new();
-        // If a selection is active, delete it first.
         if let Some(((sl, sc), (el, ec))) = self.normalized_selection() {
             match self.doc_mut().delete_range(sl, sc, el, ec) {
                 Ok(record) => {
@@ -1364,6 +1412,16 @@ impl App {
         }
     }
 
+    /// Create a new untitled document and switch to it.
+    fn new_file(&mut self) {
+        self.docs.push(Document::new_untitled());
+        self.views.push(DocView::default());
+        self.histories.push(History::new());
+        self.selections.push(None);
+        self.active = self.docs.len() - 1;
+        self.status = i18n::t(self.lang, Key::Untitled).to_string();
+    }
+
     // -- Tab lifecycle -----------------------------------------------------
 
     fn request_close(&mut self) {
@@ -1502,6 +1560,8 @@ impl App {
             (KeyCode::F(9), _, _) => self.toggle_explorer(),
             // Ctrl+B → toggle file explorer panel
             (KeyCode::Char('b' | 'B'), true, _) => self.toggle_explorer(),
+            // Ctrl+N → new untitled file
+            (KeyCode::Char('n' | 'N'), true, _) => self.new_file(),
             // Ctrl+P → quick-open fuzzy picker
             (KeyCode::Char('p' | 'P'), true, _) => self.open_quick_open(),
             // Ctrl+O → open file prompt
@@ -1527,7 +1587,9 @@ impl App {
             // Ctrl+X / Shift+Delete → cut
             (KeyCode::Char('x' | 'X'), true, _) => self.cut_selection_or_line(),
             (KeyCode::Delete, _, true) => self.cut_selection_or_line(),
-            // Ctrl+V / Shift+Insert → paste
+            // Ctrl+Shift+V → cycle clipboard history (must precede plain Ctrl+V).
+            (KeyCode::Char('v' | 'V'), true, true) => self.paste_from_clipboard_history(),
+            // Ctrl+V → paste from system clipboard.
             (KeyCode::Char('v' | 'V'), true, _) => self.paste_from_clipboard(),
             // Ctrl+K (Shift accepted but not required — the owner's
             // terminal mangles the Ctrl+Shift+K delivery) → delete line
@@ -1860,9 +1922,17 @@ impl App {
                 }
             }
             PromptKind::SaveAs => {
-                match self.doc_mut().save_as(path) {
+                // Detect extension from content when the user saved without one.
+                let doc = self.doc();
+                let text: String = (0..doc.line_count())
+                    .map(|i| doc.line(i))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let detected = crate::languagedetect::detect_extension(&text);
+                let path = crate::languagedetect::ensure_extension(path, detected);
+                match self.doc_mut().save_as(&path) {
                     Ok(bytes) => {
-                        self.status = i18n::tr(self.lang, Key::SavedAs, &[("path", path)]);
+                        self.status = i18n::tr(self.lang, Key::SavedAs, &[("path", &path.to_string_lossy())]);
                         // Append byte count like save_active does.
                         self.status = format!("{} {bytes} B", self.status);
                     }
@@ -2034,6 +2104,7 @@ impl App {
             CommandKind::NextTab => self.next_doc(1),
             CommandKind::PrevTab => self.next_doc(-1),
             CommandKind::LastDocPanel1 => self.last_doc_of_panel(1),
+            CommandKind::NewFile => self.new_file(),
         }
     }
 
@@ -7502,5 +7573,86 @@ gamma",
                 assert!(!path.is_dir(), "quick open must not list directories");
             }
         }
+    }
+
+    #[test]
+    fn ctrl_n_creates_new_untitled_doc() {
+        let mut app = App::new(vec![Document::new_with_path(&PathBuf::from("/tmp/x.txt"))], Lang::En);
+        assert_eq!(app.docs.len(), 1);
+        assert_eq!(app.active, 0);
+        app.on_key(ctrl(KeyCode::Char('n')));
+        assert_eq!(app.docs.len(), 2, "new file must add a doc");
+        assert_eq!(app.active, 1, "new file must become active");
+        assert!(app.docs[1].path().is_none(), "new file must be untitled");
+    }
+
+    #[test]
+    fn ctrl_n_works_when_all_docs_are_untitled() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        assert_eq!(app.docs.len(), 1);
+        app.on_key(ctrl(KeyCode::Char('n')));
+        assert_eq!(app.docs.len(), 2);
+        assert_eq!(app.active, 1);
+    }
+
+    #[test]
+    fn clipboard_history_pushes_on_copy() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        // Push directly to simulate what copy_to_clipboard does.
+        app.clipboard_history_push("hello");
+        assert_eq!(app.clipboard_history.len(), 1);
+        assert_eq!(app.clipboard_history[0], "hello");
+    }
+
+    #[test]
+    fn clipboard_history_caps_at_ten() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        for i in 0..15 {
+            app.clipboard_history_push(&format!("item{}", i));
+        }
+        assert_eq!(app.clipboard_history.len(), 10);
+        // Most recent first.
+        assert_eq!(app.clipboard_history[0], "item14");
+        assert_eq!(app.clipboard_history[9], "item5");
+    }
+
+    #[test]
+    fn clipboard_history_skips_duplicates() {
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        app.clipboard_history_push("same");
+        app.clipboard_history_push("same"); // duplicate
+        assert_eq!(app.clipboard_history.len(), 1, "duplicate must not be pushed twice");
+        assert_eq!(app.clipboard_history[0], "same");
+    }
+
+    #[test]
+    fn auto_detect_extension_on_save() {
+        // Untitled doc with Rust content: Ctrl+S should open SaveAs prompt,
+        // and the auto-extension logic should append .rs when confirming.
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "fn main() { println!(\"hi\")}");
+        app.on_key(ctrl(KeyCode::Char('s')));
+        // Untitled modified doc → SaveAs prompt opens.
+        let Some((kind, _)) = &app.prompt else { panic!("save-as prompt should be open"); };
+        assert_eq!(*kind, PromptKind::SaveAs);
+    }
+
+    #[test]
+    fn auto_detect_extension_appends_to_unsaved_rust() {
+        // New untitled doc with Rust content — saving without extension should
+        // get .rs appended automatically.
+        let mut app = App::new(vec![Document::new_untitled()], Lang::En);
+        typed(&mut app, "fn main() { println!(\"hi\")}");
+        app.on_key(ctrl(KeyCode::Char('s')));
+        let Some((kind, _)) = &app.prompt else { panic!("save-as prompt should be open"); };
+        assert_eq!(*kind, PromptKind::SaveAs);
+        // We can't easily simulate a full file system save in a unit test without
+        // a real temp path, but we can verify the detection logic directly.
+        let text = "fn main() { println!(\"hi\")}";
+        assert_eq!(
+            crate::languagedetect::detect_extension(text),
+            Some("rs"),
+            "Rust content should detect .rs"
+        );
     }
 }

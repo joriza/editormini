@@ -11,6 +11,7 @@ mod explorer;
 mod fuzzy;
 mod highlight;
 mod i18n;
+mod languagedetect;
 mod pane;
 mod theme;
 

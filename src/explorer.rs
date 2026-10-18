@@ -180,7 +180,11 @@ impl ExplorerState {
         // temp dir in tests): there's no valid parent to go to.
         if self.root.is_dir() {
             self.rows.push(ExplorerRow {
-                path: self.root.parent().unwrap_or(self.root.as_path()).to_path_buf(),
+                path: self
+                    .root
+                    .parent()
+                    .unwrap_or(self.root.as_path())
+                    .to_path_buf(),
                 name: "..".to_string(),
                 is_dir: true,
                 depth: 0,
@@ -286,13 +290,19 @@ impl ExplorerState {
 mod tests {
     use super::*;
 
+    /// Monotonic counter to give each test's temp dir a unique suffix,
+    /// avoiding collisions when cargo runs tests in parallel.
+    static FIXTURE_COUNTER: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
     /// Minimal fixture: root has two dirs (alpha, bravo) and one file (a.txt).
     /// alpha contains beta/ and foxtrot.txt; beta contains charlie/.
     /// charlie contains delta/ which contains echo.txt.
     /// bravo contains golf.txt.
     fn fixture(suffix: &str) -> PathBuf {
+        let id = FIXTURE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "editormini_explorer_fixture_{suffix}_{}",
+            "editormini_explorer_fixture_{suffix}_{id}_{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
@@ -521,10 +531,8 @@ mod tests {
 
     #[test]
     fn dot_directories_are_hidden() {
-        let dir = std::env::temp_dir().join(format!(
-            "editormini_explorer_dots_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("editormini_explorer_dots_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(".git")).unwrap();
         std::fs::create_dir_all(dir.join(".github")).unwrap();
@@ -545,9 +553,15 @@ mod tests {
             !names.iter().any(|&n| n == ".github"),
             "dot-directories must be hidden: {names:?}"
         );
-        assert!(names.contains(&"visible.txt"), "regular files must show: {names:?}");
+        assert!(
+            names.contains(&"visible.txt"),
+            "regular files must show: {names:?}"
+        );
         // Dot-files are NOT directories, so they should still appear.
-        assert!(names.contains(&".hidden_file"), "dot-files must show: {names:?}");
+        assert!(
+            names.contains(&".hidden_file"),
+            "dot-files must show: {names:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
